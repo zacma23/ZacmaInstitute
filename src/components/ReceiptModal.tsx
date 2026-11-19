@@ -54,15 +54,15 @@ export function ReceiptModal({
 
         <div id="zacma-printable-receipt" className="p-8 bg-white text-slate-900">
           {/* Institutional Header */}
-          <div className="flex items-start justify-between gap-6 pb-6 border-b-2 border-slate-900">
+          <div className="flex items-start justify-between gap-6 pb-6 border-b-2 border-blue-700">
             <div>
               <div className="flex items-center gap-2.5 mb-2">
-                <div className="w-9 h-9 rounded-lg bg-slate-900 text-white font-display font-extrabold text-sm flex items-center justify-center tracking-tight">
+                <div className="w-9 h-9 rounded-lg bg-blue-700 text-white font-display font-extrabold text-sm flex items-center justify-center tracking-tight">
                   ZT
                 </div>
                 <div>
-                  <h1 className="text-lg font-extrabold text-slate-900 tracking-tight leading-tight">
-                    ZACMA Technology &amp; Training Institute
+                  <h1 className="text-base sm:text-lg font-extrabold text-slate-900 tracking-tight leading-tight">
+                    ZACMA TECHNOLOGY &amp; TRAINING INSTITUTE
                   </h1>
                   <p className="text-xs text-slate-500">
                     Office of the Registrar &amp; Student Accounts · Addis Ababa, Ethiopia
@@ -74,7 +74,7 @@ export function ReceiptModal({
               </p>
             </div>
             <div className="text-right shrink-0">
-              <p className="text-xs font-semibold text-blue-700 tracking-wide">
+              <p className="text-xs font-bold text-red-600 tracking-wide">
                 OFFICIAL RECEIPT
               </p>
               <p className="text-base font-mono font-bold text-slate-900 tabular-nums mt-0.5">
@@ -185,7 +185,7 @@ export function ReceiptModal({
               </div>
               <p className="text-xs font-semibold text-slate-700">Authorized Signature</p>
               <p className="text-[11px] text-slate-500">
-                Finance Controller · ZACMA Institute
+                Finance Controller · ZACMA Technology &amp; Training Institute
               </p>
             </div>
           </div>

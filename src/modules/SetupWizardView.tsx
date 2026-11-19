@@ -253,6 +253,79 @@ export function SetupWizardView() {
         </div>
       </div>
 
+      {/* Guided Readiness & Remaining Configuration Steps */}
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900">
+              Guided Integration &amp; Remaining Configuration Steps
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Live readiness verification across active runtime, migrations, AI Assistant, and GitHub/Vercel/Supabase deployment.
+            </p>
+          </div>
+          {status?.lastScheduledReminderRun && (
+            <span className="text-[11px] font-mono text-slate-500">
+              Scheduler: {status.lastScheduledReminderRun.status} ({status.lastScheduledReminderRun.trigger})
+            </span>
+          )}
+        </div>
+        <div className="divide-y divide-slate-100 text-xs">
+          {[
+            {
+              step: '1. Active Cloud Database & Required Collections',
+              done: Boolean(status?.activeFirestore.configured) && courses.length > 0,
+              detail: status?.activeFirestore.configured
+                ? `Connected to live Firestore (${status.activeFirestore.databaseId}) with ${students.length} students, ${courses.length} courses, and ${payments.length} payments intact.`
+                : 'Waiting for database configuration check.',
+            },
+            {
+              step: '2. Additive Schema Migrations (Versions 0001–0004)',
+              done:
+                appliedVersionSet.has('0001') &&
+                appliedVersionSet.has('0002') &&
+                appliedVersionSet.has('0003') &&
+                appliedVersionSet.has('0004'),
+              detail:
+                appliedVersionSet.size >= 4
+                  ? 'All 4 additive migration versions are recorded and verified.'
+                  : 'Click "Run Additive Migrations" above to safely verify collections and record versions 0001–0004.',
+            },
+            {
+              step: '3. Server-Side ZACMA AI Assistant (GEMINI_API_KEY)',
+              done: Boolean(status?.providers.ai.configured),
+              detail: status?.providers.ai.configured
+                ? `Active on server using ${status.providers.ai.model}. Never exposed to browser JavaScript.`
+                : 'Set GEMINI_API_KEY in server environment variables (or Vercel Project Settings). Portal continues working normally without it.',
+            },
+            {
+              step: '4. External Supabase PostgreSQL & Vercel Cron (For GitHub -> Vercel Deployment)',
+              done:
+                Boolean(status?.providers.supabase.ready) &&
+                Boolean(status?.providers.cronSecretConfigured),
+              detail:
+                status?.providers.supabase.ready && status?.providers.cronSecretConfigured
+                  ? 'Supabase URL, keys, and CRON_SECRET are detected on the server.'
+                  : 'When deploying to Vercel: add SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, and CRON_SECRET in Vercel Project Settings and run SQL migrations 0001–0004 in Supabase.',
+            },
+          ].map((row) => (
+            <div key={row.step} className="px-5 py-3 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="font-semibold text-slate-900">{row.step}</p>
+                <p className="text-slate-600 mt-0.5 leading-relaxed">{row.detail}</p>
+              </div>
+              <span
+                className={`text-xs font-semibold shrink-0 whitespace-nowrap ${
+                  row.done ? 'text-emerald-700' : 'text-amber-700'
+                }`}
+              >
+                {row.done ? 'Complete' : 'Action Needed'}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* Environment Variable Detection + Version-Controlled Migrations Registry */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl overflow-hidden">

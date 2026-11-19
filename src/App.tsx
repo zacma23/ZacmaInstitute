@@ -274,6 +274,28 @@ function PortalShell() {
 
       {/* Signed-In Staff Footer */}
       <div className="p-4 border-t border-slate-800 space-y-3 shrink-0">
+        {actualRole === 'ADMIN' && (
+          <div className="md:hidden space-y-1">
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              View Portal As
+            </label>
+            <select
+              value={effectiveRole}
+              onChange={(e) => {
+                const next = e.target.value as RoleCode;
+                setPreviewRole(next === 'ADMIN' ? null : next);
+                setMobileMenuOpen(false);
+              }}
+              className="w-full px-2.5 py-1.5 text-xs bg-slate-800 border border-slate-700 text-white rounded-lg"
+            >
+              <option value="ADMIN">Admin</option>
+              <option value="ACCOUNTANT">Accountant</option>
+              <option value="INSTRUCTOR">Instructor</option>
+              <option value="GENERAL_STAFF">General Staff</option>
+              <option value="STUDENT">Student Portal</option>
+            </select>
+          </div>
+        )}
         <div className="min-w-0">
           <p className="text-xs font-semibold text-white truncate">{profile.fullName}</p>
           <p className="text-[11px] text-slate-400 truncate">

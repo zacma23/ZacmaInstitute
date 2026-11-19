@@ -11,15 +11,15 @@ export function LoginScreen() {
       <div className="lg:col-span-7 bg-slate-900 text-white p-8 sm:p-12 lg:p-16 flex flex-col justify-between">
         <div>
           <div className="flex items-center gap-3 mb-12">
-            <div className="w-10 h-10 rounded-lg bg-blue-700 text-white font-display font-extrabold text-base flex items-center justify-center">
+            <div className="w-10 h-10 rounded-lg bg-blue-700 text-white font-display font-extrabold text-base flex items-center justify-center shrink-0">
               ZT
             </div>
             <div>
-              <p className="font-display font-bold text-lg tracking-tight leading-none">
-                ZACMA Institute
+              <p className="font-display font-bold text-base sm:text-lg tracking-tight leading-none">
+                ZACMA TECHNOLOGY &amp; TRAINING INSTITUTE
               </p>
               <p className="text-xs text-slate-400 mt-1">
-                Technology &amp; Training Portal
+                Student Fee Management &amp; Institutional Accounting Portal
               </p>
             </div>
           </div>
@@ -75,12 +75,14 @@ export function LoginScreen() {
       <div className="lg:col-span-5 flex items-center justify-center p-8 sm:p-12 bg-white">
         <div className="w-full max-w-sm">
           <div className="mb-8">
-            <p className="text-xs font-semibold text-blue-700 mb-2">Staff Portal Access</p>
+            <p className="text-xs font-semibold text-blue-700 mb-2">
+              ZACMA Staff &amp; Student Portal Access
+            </p>
             <h2 className="text-2xl font-display font-bold text-slate-900 mb-2">
               Sign in to continue
             </h2>
             <p className="text-sm text-slate-500 leading-relaxed">
-              Authenticate with your institutional Google account. Role permissions are enforced automatically by the portal database.
+              Authenticate with your institutional Google account. Role permissions (Admin, Accountant, Instructor, General Staff, or isolated Student Portal) are enforced automatically by database security rules.
             </p>
           </div>
 
@@ -118,9 +120,9 @@ export function LoginScreen() {
           </button>
 
           <div className="mt-8 pt-6 border-t border-slate-200 flex items-start gap-2.5 text-xs text-slate-500">
-            <Lock className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+            <Lock className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
             <p className="leading-relaxed">
-              Protected by database-enforced Role-Based Access Control (Admin, Accountant, Instructor) and immutable financial audit logging.
+              Protected by database-enforced Role-Based Access Control (Admin, Accountant, Instructor, General Staff, Student) and immutable financial audit logging.
             </p>
           </div>
         </div>
