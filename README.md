@@ -83,13 +83,14 @@ git push -u origin main
 ### 3. Deploy to Vercel
 
 1. Import your GitHub repository in [vercel.com](https://vercel.com).
-2. Configure Environment Variables in **Vercel Project Settings -> Environment Variables**:
-   - `GEMINI_API_KEY` (Server-side only — powers ZACMA AI Assistant via `/api/ai/chat`)
-   - `GEMINI_MODEL` (default: `gemini-4-hydrogen`)
+2. Configure Environment Variables in **Vercel Project Settings -> Environment Variables** (select **Production**, **Preview**, and **Development**):
+   - `GEMINI_API_KEY` (Server-side only — never commit to GitHub and never prefix with `VITE_`; powers ZACMA AI Assistant via `/api/ai/chat`)
+   - `GEMINI_MODEL` (optional — e.g. `gemini-flash-latest`; defaults to `gemini-4-hydrogen` with automatic fallback to `gemini-flash-latest`)
    - `CRON_SECRET` (random token used to authenticate Vercel Cron requests to `/api/cron/reminders`)
    - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (when connecting to Supabase; `/api/cron/reminders` automatically calls `public.process_zacma_payment_reminders()` server-side without requiring an open browser tab)
    - Optional external channels: `SMTP_*`, `TWILIO_*`, `WHATSAPP_*`
-3. Vercel automatically deploys the Vite frontend (`dist`), the serverless API routes under `/api/` (`/api/health`, `/api/ai/chat`, `/api/setup/status`, `/api/cron/reminders`, `/api/reminders/dispatch-external`, `/api/reminders/record-run`), and the daily 06:00 UTC Cron schedule defined in `vercel.json`.
+3. Trigger a **Redeploy** in Vercel after adding or changing Environment Variables so serverless functions pick up the new secrets.
+4. Vercel automatically deploys the Vite frontend (`dist`), the serverless API routes under `/api/` (`/api/health`, `/api/ai/chat`, `/api/setup/status`, `/api/cron/reminders`, `/api/reminders/dispatch-external`, `/api/reminders/record-run`), and the daily 06:00 UTC Cron schedule defined in `vercel.json`.
 
 ---
 

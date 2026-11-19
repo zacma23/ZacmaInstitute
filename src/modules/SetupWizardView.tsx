@@ -2,17 +2,26 @@ import React, { useEffect, useState } from 'react';
 import {
   CheckCircle2,
   Database,
+  ExternalLink,
   FileCode2,
   GitBranch,
+  Globe,
+  Link2,
+  Mail,
+  MessageSquare,
   Play,
   RefreshCw,
   Server,
   ShieldAlert,
   ShieldCheck,
+  Smartphone,
+  Sparkles,
+  UserPlus,
   XCircle,
 } from 'lucide-react';
 import { usePortal } from '../context/PortalContext';
 import { ConfirmDialog } from '../components/PortalUI';
+import { activeFirebaseDatabaseId, activeFirebaseProjectId } from '../lib/firebase';
 import { applyIdempotentMigrations, MigrationExecutionStep } from '../lib/zacmaService';
 import { formatDateShort } from '../types/zacma';
 
@@ -63,6 +72,69 @@ interface SetupStatusPayload {
     evaluatedCount: number;
   };
 }
+
+interface EnvConnectorLink {
+  providerLabel: string;
+  signupUrl: string;
+  loginUrl: string;
+  integrateUrl?: string;
+  integrateLabel?: string;
+}
+
+const ENV_CONNECTOR_LINKS: Record<string, EnvConnectorLink> = {
+  GEMINI_API_KEY: {
+    providerLabel: 'Google AI Studio',
+    signupUrl: 'https://aistudio.google.com/',
+    loginUrl: 'https://aistudio.google.com/',
+    integrateUrl: 'https://vercel.com/dashboard',
+    integrateLabel: 'Vercel Settings',
+  },
+  SUPABASE_URL: {
+    providerLabel: 'Supabase',
+    signupUrl: 'https://supabase.com/dashboard/sign-up',
+    loginUrl: 'https://supabase.com/dashboard/projects',
+    integrateUrl: 'https://vercel.com/integrations/supabase',
+    integrateLabel: 'Connect to Vercel',
+  },
+  SUPABASE_ANON_KEY: {
+    providerLabel: 'Supabase',
+    signupUrl: 'https://supabase.com/dashboard/sign-up',
+    loginUrl: 'https://supabase.com/dashboard/projects',
+    integrateUrl: 'https://vercel.com/integrations/supabase',
+    integrateLabel: 'Connect to Vercel',
+  },
+  SUPABASE_SERVICE_ROLE_KEY: {
+    providerLabel: 'Supabase',
+    signupUrl: 'https://supabase.com/dashboard/sign-up',
+    loginUrl: 'https://supabase.com/dashboard/projects',
+    integrateUrl: 'https://vercel.com/integrations/supabase',
+    integrateLabel: 'Connect to Vercel',
+  },
+  CRON_SECRET: {
+    providerLabel: 'Vercel Cron',
+    signupUrl: 'https://vercel.com/signup',
+    loginUrl: 'https://vercel.com/dashboard',
+    integrateUrl: 'https://vercel.com/dashboard',
+    integrateLabel: 'Vercel Settings',
+  },
+  'SMTP_HOST / SMTP_USER / SMTP_PASS': {
+    providerLabel: 'Resend / SMTP Email',
+    signupUrl: 'https://resend.com/signup',
+    loginUrl: 'https://resend.com/login',
+    integrateUrl: 'https://vercel.com/integrations/resend',
+    integrateLabel: 'Connect to Vercel',
+  },
+  'TWILIO_ACCOUNT_SID / AUTH_TOKEN': {
+    providerLabel: 'Twilio SMS',
+    signupUrl: 'https://www.twilio.com/try-twilio',
+    loginUrl: 'https://console.twilio.com/',
+  },
+  'WHATSAPP_API_TOKEN / PHONE_ID': {
+    providerLabel: 'Meta WhatsApp Cloud',
+    signupUrl: 'https://developers.facebook.com/apps/',
+    loginUrl: 'https://business.facebook.com/',
+  },
+};
 
 const MIGRATION_DESCRIPTIONS: Record<string, string> = {
   '0001': 'Baseline ZACMA tables (courses, students, enrollments, installments, payments, receipts, expenses, attendance, audit logs) & RLS.',
@@ -130,6 +202,129 @@ export function SetupWizardView() {
 
   const appliedVersionSet = new Set(schemaMigrations.map((m) => m.version));
 
+  const resolvedProjectId = status?.activeFirestore.projectId || activeFirebaseProjectId;
+  const resolvedDatabaseId = status?.activeFirestore.databaseId || activeFirebaseDatabaseId;
+  const isFirestoreConnected = Boolean(
+    status?.activeFirestore.configured || (resolvedProjectId && (courses.length > 0 || staffProfiles.length > 0))
+  );
+
+  const firebaseProjectConsoleUrl = resolvedProjectId
+    ? `https://console.firebase.google.com/project/${resolvedProjectId}/overview`
+    : 'https://console.firebase.google.com/';
+  const firebaseAuthDomainsUrl = resolvedProjectId
+    ? `https://console.firebase.google.com/project/${resolvedProjectId}/authentication/settings`
+    : 'https://console.firebase.google.com/';
+
+  const connectorCards = [
+    {
+      id: 'firebase',
+      name: 'Firebase Auth & Cloud Firestore',
+      category: 'Active Cloud Database & Google Sign-In',
+      connected: isFirestoreConnected,
+      optional: false,
+      detail: resolvedProjectId
+        ? `Project ${resolvedProjectId} · DB ${resolvedDatabaseId}. Authorize your Vercel domain and inspect Firestore collections directly.`
+        : 'Create or sign in to Firebase Console to manage authentication domains and Cloud Firestore.',
+      icon: Database,
+      signupUrl: 'https://console.firebase.google.com/',
+      signupLabel: 'Open Firebase Console',
+      loginUrl: firebaseAuthDomainsUrl,
+      loginLabel: 'Auth Domains',
+      integrateUrl: firebaseProjectConsoleUrl,
+      integrateLabel: 'Project Overview',
+    },
+    {
+      id: 'supabase',
+      name: 'Supabase PostgreSQL & Auth',
+      category: 'External SQL Database & RLS Target',
+      connected: Boolean(status?.providers.supabase.ready && status?.supabaseConnectivity.reachable),
+      optional: false,
+      detail:
+        'Create a Supabase account, sign in, or launch the official Vercel Marketplace connector to link your PostgreSQL project and sync server env vars automatically.',
+      icon: GitBranch,
+      signupUrl: 'https://supabase.com/dashboard/sign-up',
+      signupLabel: 'Create Supabase Account',
+      loginUrl: 'https://supabase.com/dashboard/projects',
+      loginLabel: 'Supabase Login',
+      integrateUrl: 'https://vercel.com/integrations/supabase',
+      integrateLabel: 'Connect Supabase to Vercel',
+    },
+    {
+      id: 'vercel',
+      name: 'Vercel Hosting, Secrets & Cron',
+      category: 'Deployment Platform & Daily Reminder Scheduler',
+      connected: Boolean(status?.providers.cronSecretConfigured),
+      optional: false,
+      detail:
+        'Sign up or log in to Vercel to connect your GitHub repo, link Marketplace databases, manage server environment variables, and run the daily 06:00 UTC reminder cron.',
+      icon: Globe,
+      signupUrl: 'https://vercel.com/signup',
+      signupLabel: 'Create Vercel Account',
+      loginUrl: 'https://vercel.com/dashboard',
+      loginLabel: 'Vercel Dashboard',
+      integrateUrl: 'https://vercel.com/integrations',
+      integrateLabel: 'Vercel Marketplace',
+    },
+    {
+      id: 'gemini',
+      name: 'Google AI Studio (Gemini)',
+      category: 'Server-Side ZACMA AI Assistant',
+      connected: Boolean(status?.providers.ai.configured),
+      optional: false,
+      detail:
+        'Sign in with Google to Google AI Studio and link your project in Vercel Project Settings -> Environment Variables so ZACMA AI Assistant runs strictly server-side.',
+      icon: Sparkles,
+      signupUrl: 'https://aistudio.google.com/',
+      signupLabel: 'Sign In to Google AI Studio',
+      loginUrl: 'https://vercel.com/dashboard',
+      loginLabel: 'Configure on Vercel',
+    },
+    {
+      id: 'email',
+      name: 'Email Connector (Resend / SMTP)',
+      category: 'Automated Student Payment Reminder Emails',
+      connected: Boolean(status?.providers.channels.email.configured),
+      optional: true,
+      detail:
+        'Sign up or connect Resend directly to Vercel via Marketplace, or use your institute SMTP account for outgoing fee reminder emails.',
+      icon: Mail,
+      signupUrl: 'https://resend.com/signup',
+      signupLabel: 'Sign Up (Resend)',
+      loginUrl: 'https://resend.com/login',
+      loginLabel: 'Login',
+      integrateUrl: 'https://vercel.com/integrations/resend',
+      integrateLabel: 'Connect to Vercel',
+    },
+    {
+      id: 'sms',
+      name: 'Twilio SMS Connector',
+      category: 'Automated Student Payment Reminder SMS',
+      connected: Boolean(status?.providers.channels.sms.configured),
+      optional: true,
+      detail:
+        'Create a Twilio account or sign in to the Twilio Console to enable Ethiopian / international SMS fee deadline alerts.',
+      icon: Smartphone,
+      signupUrl: 'https://www.twilio.com/try-twilio',
+      signupLabel: 'Create Twilio Account',
+      loginUrl: 'https://console.twilio.com/',
+      loginLabel: 'Twilio Console',
+    },
+    {
+      id: 'whatsapp',
+      name: 'Meta WhatsApp Cloud API',
+      category: 'Automated Student WhatsApp Fee Alerts',
+      connected: Boolean(status?.providers.channels.whatsapp.configured),
+      optional: true,
+      detail:
+        'Sign up or log in to Meta for Developers and Meta Business Suite to register a WhatsApp Cloud sender for student payment notifications.',
+      icon: MessageSquare,
+      signupUrl: 'https://developers.facebook.com/apps/',
+      signupLabel: 'Meta Developers Login',
+      loginUrl: 'https://business.facebook.com/',
+      loginLabel: 'Business Suite',
+    },
+  ];
+
   const collectionAudit = [
     { name: 'roles', count: roles.length },
     { name: 'profiles', count: staffProfiles.length },
@@ -179,7 +374,7 @@ export function SetupWizardView() {
             Database Integration &amp; System Setup Wizard
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Inspect server environment variables, live database connectivity, required collections, and safe additive schema migrations. Credentials are never exposed to the browser.
+            Inspect live database connectivity, launch direct sign-up/login links for each connector and database provider, and apply safe additive schema migrations. Credentials are never exposed to the browser.
           </p>
         </div>
         <div className="flex items-center gap-2.5">
@@ -211,10 +406,10 @@ export function SetupWizardView() {
             <Database className="w-4 h-4 text-blue-700" />
           </div>
           <p className="text-base font-display font-bold text-slate-900">
-            {status?.activeFirestore.configured ? 'Cloud Firestore Connected' : 'Checking...'}
+            {isFirestoreConnected ? 'Cloud Firestore Connected' : 'Checking...'}
           </p>
           <p className="text-[11px] font-mono text-slate-500 mt-1 truncate">
-            {status?.activeFirestore.databaseId || 'Inspecting config...'}
+            {resolvedProjectId ? `${resolvedProjectId} · ${resolvedDatabaseId}` : 'Inspecting config...'}
           </p>
         </div>
 
@@ -228,7 +423,7 @@ export function SetupWizardView() {
               status?.providers.ai.configured ? 'text-emerald-700' : 'text-amber-700'
             }`}
           >
-            {status?.providers.ai.configured ? 'GEMINI_API_KEY Configured' : 'API Key Not Set'}
+            {status?.providers.ai.configured ? 'GEMINI_API_KEY Configured' : 'Not Connected Yet'}
           </p>
           <p className="text-[11px] font-mono text-slate-500 mt-1">
             Model: {status?.providers.ai.model || 'gemini-4-hydrogen'} (Server-side only)
@@ -245,7 +440,7 @@ export function SetupWizardView() {
               ? status.supabaseConnectivity.reachable
                 ? 'Supabase Connected'
                 : 'Supabase Unreachable'
-              : 'SQL Migrations Ready'}
+              : 'Ready to Connect'}
           </p>
           <p className="text-[11px] text-slate-500 mt-1 truncate">
             {status?.supabaseConnectivity.detail || 'Version-controlled SQL in /supabase/migrations/'}
@@ -274,10 +469,14 @@ export function SetupWizardView() {
           {[
             {
               step: '1. Active Cloud Database & Required Collections',
-              done: Boolean(status?.activeFirestore.configured) && courses.length > 0,
-              detail: status?.activeFirestore.configured
-                ? `Connected to live Firestore (${status.activeFirestore.databaseId}) with ${students.length} students, ${courses.length} courses, and ${payments.length} payments intact.`
-                : 'Waiting for database configuration check.',
+              done: isFirestoreConnected && courses.length > 0,
+              detail: isFirestoreConnected
+                ? `Connected to live Firestore (${resolvedProjectId} / ${resolvedDatabaseId}) with ${students.length} students, ${courses.length} courses, and ${payments.length} payments intact.`
+                : 'Sign in to Firebase Console to verify your project database and authorized Vercel domains.',
+              links: [
+                { label: 'Firebase Console', href: firebaseProjectConsoleUrl },
+                { label: 'Auth Domains', href: firebaseAuthDomainsUrl },
+              ],
             },
             {
               step: '2. Additive Schema Migrations (Versions 0001–0004)',
@@ -289,14 +488,23 @@ export function SetupWizardView() {
               detail:
                 appliedVersionSet.size >= 4
                   ? 'All 4 additive migration versions are recorded and verified.'
-                  : 'Click "Run Additive Migrations" above to safely verify collections and record versions 0001–0004.',
+                  : 'Click "Run Additive Migrations" to safely verify collections and record versions 0001–0004.',
+              actionButton:
+                appliedVersionSet.size < 4
+                  ? { label: 'Run Migrations Now', onClick: () => setConfirmOpen(true) }
+                  : undefined,
+              links: [{ label: 'Supabase SQL Editor', href: 'https://supabase.com/dashboard/projects' }],
             },
             {
               step: '3. Server-Side ZACMA AI Assistant (GEMINI_API_KEY)',
               done: Boolean(status?.providers.ai.configured),
               detail: status?.providers.ai.configured
                 ? `Active on server using ${status.providers.ai.model}. Never exposed to browser JavaScript.`
-                : 'Set GEMINI_API_KEY in server environment variables (or Vercel Project Settings). Portal continues working normally without it.',
+                : 'Sign in to Google AI Studio and link GEMINI_API_KEY in Vercel Project Settings -> Environment Variables, then redeploy.',
+              links: [
+                { label: 'Google AI Studio', href: 'https://aistudio.google.com/' },
+                { label: 'Vercel Dashboard', href: 'https://vercel.com/dashboard' },
+              ],
             },
             {
               step: '4. External Supabase PostgreSQL & Vercel Cron (For GitHub -> Vercel Deployment)',
@@ -306,13 +514,42 @@ export function SetupWizardView() {
               detail:
                 status?.providers.supabase.ready && status?.providers.cronSecretConfigured
                   ? 'Supabase URL, keys, and CRON_SECRET are detected on the server.'
-                  : 'When deploying to Vercel: add SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, and CRON_SECRET in Vercel Project Settings and run SQL migrations 0001–0004 in Supabase.',
+                  : 'Create a Supabase account or connect Supabase directly to your Vercel project via Vercel Marketplace to auto-sync database environment variables.',
+              links: [
+                { label: 'Sign Up Supabase', href: 'https://supabase.com/dashboard/sign-up' },
+                { label: 'Connect Supabase -> Vercel', href: 'https://vercel.com/integrations/supabase' },
+                { label: 'Vercel Dashboard', href: 'https://vercel.com/dashboard' },
+              ],
             },
           ].map((row) => (
-            <div key={row.step} className="px-5 py-3 flex items-start justify-between gap-4">
+            <div key={row.step} className="px-5 py-3.5 flex flex-col sm:flex-row sm:items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="font-semibold text-slate-900">{row.step}</p>
                 <p className="text-slate-600 mt-0.5 leading-relaxed">{row.detail}</p>
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  {row.actionButton && (
+                    <button
+                      type="button"
+                      onClick={row.actionButton.onClick}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-md"
+                    >
+                      <Play className="w-3 h-3" />
+                      {row.actionButton.label}
+                    </button>
+                  )}
+                  {row.links.map((link) => (
+                    <a
+                      key={link.label}
+                      href={link.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md transition-colors"
+                    >
+                      {link.label}
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  ))}
+                </div>
               </div>
               <span
                 className={`text-xs font-semibold shrink-0 whitespace-nowrap ${
@@ -326,35 +563,157 @@ export function SetupWizardView() {
         </div>
       </div>
 
+      {/* Direct Connector Accounts & Integration Hub */}
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Link2 className="w-4 h-4 text-blue-700 shrink-0" />
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">
+                Direct Connector Sign-Up, Login &amp; Integration Launchpad
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Create accounts, sign in to each database or notification provider, and authorize Vercel Marketplace connectors directly from the Admin Portal.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 divide-y md:divide-y-0 md:gap-px bg-slate-200">
+          {connectorCards.map((connector) => {
+            const Icon = connector.icon;
+            return (
+              <div key={connector.id} className="bg-white p-5 flex flex-col justify-between gap-4">
+                <div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
+                        <Icon className="w-4 h-4 text-blue-700" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-900 truncate">{connector.name}</p>
+                        <p className="text-[11px] text-slate-500 truncate">{connector.category}</p>
+                      </div>
+                    </div>
+                    <span
+                      className={`text-[11px] font-semibold shrink-0 ${
+                        connector.connected
+                          ? 'text-emerald-700'
+                          : connector.optional
+                          ? 'text-slate-500'
+                          : 'text-amber-700'
+                      }`}
+                    >
+                      {connector.connected ? 'Connected' : connector.optional ? 'Optional' : 'Setup Needed'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-3 leading-relaxed">{connector.detail}</p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                  <a
+                    href={connector.signupUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-md transition-colors"
+                  >
+                    <UserPlus className="w-3 h-3" />
+                    {connector.signupLabel}
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                  <a
+                    href={connector.loginUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-md transition-colors"
+                  >
+                    {connector.loginLabel}
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                  {connector.integrateUrl && connector.integrateLabel && (
+                    <a
+                      href={connector.integrateUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md transition-colors"
+                    >
+                      {connector.integrateLabel}
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Environment Variable Detection + Version-Controlled Migrations Registry */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-200">
-            <h2 className="text-sm font-bold text-slate-900">Server Environment Variables</h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Presence check only — secret values are never sent to the browser.
-            </p>
+          <div className="px-5 py-4 border-b border-slate-200 flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Server Environment Variables</h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Presence check only — open each connector directly to create an account or configure in Vercel.
+              </p>
+            </div>
+            <a
+              href="https://vercel.com/dashboard"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:text-blue-800 shrink-0"
+            >
+              Vercel
+              <ExternalLink className="w-3 h-3" />
+            </a>
           </div>
           <div className="divide-y divide-slate-100 text-xs">
-            {(status?.requiredEnvChecklist || []).map((item) => (
-              <div key={item.key} className="px-5 py-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="font-mono font-semibold text-slate-900 truncate">{item.key}</p>
-                  <p className="text-[11px] text-slate-500">{item.requiredFor}</p>
+            {(status?.requiredEnvChecklist || []).map((item) => {
+              const linkInfo = ENV_CONNECTOR_LINKS[item.key];
+              return (
+                <div key={item.key} className="px-5 py-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-mono font-semibold text-slate-900 truncate">{item.key}</p>
+                    <p className="text-[11px] text-slate-500">{item.requiredFor}</p>
+                    {linkInfo && (
+                      <div className="flex flex-wrap items-center gap-2.5 mt-1.5">
+                        <a
+                          href={linkInfo.signupUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:underline"
+                        >
+                          Sign Up / Login ({linkInfo.providerLabel})
+                          <ExternalLink className="w-2.5 h-2.5" />
+                        </a>
+                        {linkInfo.integrateUrl && linkInfo.integrateLabel && (
+                          <a
+                            href={linkInfo.integrateUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-blue-700 hover:underline"
+                          >
+                            {linkInfo.integrateLabel}
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {item.present ? (
+                    <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold shrink-0 mt-0.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Present
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-slate-400 font-medium shrink-0 mt-0.5">
+                      <XCircle className="w-3.5 h-3.5" />
+                      Unset
+                    </span>
+                  )}
                 </div>
-                {item.present ? (
-                  <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold shrink-0">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    Present
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 text-slate-400 font-medium shrink-0">
-                    <XCircle className="w-3.5 h-3.5" />
-                    Unset
-                  </span>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

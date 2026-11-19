@@ -14,7 +14,7 @@ export function getAiModelName(): string {
 }
 
 export function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey.trim().length < 10) {
     return null;
   }
@@ -218,42 +218,64 @@ ${JSON.stringify(context || {}, null, 2).slice(0, 12000)}`;
     ? `Recent conversation:\n${conversationLines}\n\nCurrent user question:\n${message.trim().slice(0, 1500)}`
     : message.trim().slice(0, 1500);
 
-  const model = getAiModelName();
+  const primaryModel = getAiModelName();
+  const candidateModels =
+    primaryModel === 'gemini-flash-latest'
+      ? [primaryModel]
+      : [primaryModel, 'gemini-flash-latest'];
+
   let lastError: unknown = null;
 
-  // One graceful retry on transient 503/429 overload, then propagate real error honestly
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: promptText,
-        config: {
-          systemInstruction,
-        },
-      });
-      const reply = response.text?.trim();
-      if (!reply) {
+  for (const activeModel of candidateModels) {
+    let modelNotFound = false;
+
+    // One graceful retry on transient 503/429 overload, then propagate real error honestly
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model: activeModel,
+          contents: promptText,
+          config: {
+            systemInstruction,
+          },
+        });
+        const reply = response.text?.trim();
+        if (!reply) {
+          return {
+            status: 502,
+            body: { error: 'AI service returned an empty response.' },
+          };
+        }
         return {
-          status: 502,
-          body: { error: 'AI service returned an empty response.' },
+          status: 200,
+          body: {
+            reply,
+            model: activeModel,
+            timestamp: new Date().toISOString(),
+          },
         };
+      } catch (error) {
+        lastError = error;
+        const errText = error instanceof Error ? error.message : String(error);
+        const isNotFound =
+          errText.includes('404') ||
+          errText.includes('NOT_FOUND') ||
+          errText.toLowerCase().includes('not found');
+        if (isNotFound) {
+          modelNotFound = true;
+          break;
+        }
+        const isTransient =
+          errText.includes('503') || errText.includes('UNAVAILABLE') || errText.includes('429');
+        if (attempt === 0 && isTransient) {
+          await new Promise((r) => setTimeout(r, 900));
+          continue;
+        }
+        break;
       }
-      return {
-        status: 200,
-        body: {
-          reply,
-          model,
-          timestamp: new Date().toISOString(),
-        },
-      };
-    } catch (error) {
-      lastError = error;
-      const errText = error instanceof Error ? error.message : String(error);
-      const isTransient = errText.includes('503') || errText.includes('UNAVAILABLE') || errText.includes('429');
-      if (attempt === 0 && isTransient) {
-        await new Promise((r) => setTimeout(r, 900));
-        continue;
-      }
+    }
+
+    if (!modelNotFound) {
       break;
     }
   }
@@ -280,7 +302,13 @@ export async function handleSetupStatus(rootDir: string = process.cwd()): Promis
     databaseId?: string;
   } = { configured: false };
 
-  if (fs.existsSync(firebaseConfigPath)) {
+  if (process.env.VITE_FIREBASE_PROJECT_ID) {
+    activeFirestoreInfo = {
+      configured: true,
+      projectId: process.env.VITE_FIREBASE_PROJECT_ID,
+      databaseId: process.env.VITE_FIREBASE_DATABASE_ID || '(default)',
+    };
+  } else if (fs.existsSync(firebaseConfigPath)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf-8'));
       activeFirestoreInfo = {

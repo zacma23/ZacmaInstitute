@@ -27,6 +27,7 @@ const resolvedDatabaseId = usingCustomEnvFirebase
 
 export const activeFirebaseProjectId = resolvedFirebaseConfig.projectId;
 export const activeFirebaseAuthDomain = resolvedFirebaseConfig.authDomain;
+export const activeFirebaseDatabaseId = resolvedDatabaseId;
 export const isUsingCustomFirebaseEnv = usingCustomEnvFirebase;
 
 const app = initializeApp(resolvedFirebaseConfig);
