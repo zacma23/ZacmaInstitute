@@ -27,21 +27,39 @@ export type NotificationType =
   | 'PAYMENT_RECEIVED'
   | 'PAYMENT_APPROVED'
   | 'PAYMENT_REJECTED'
-  | 'OUTSTANDING_BALANCE';
+  | 'OUTSTANDING_BALANCE'
+  | 'REGISTRATION_APPROVED'
+  | 'COURSE_ANNOUNCEMENT'
+  | 'ATTENDANCE_UPDATE'
+  | 'INSTRUCTOR_MESSAGE'
+  | 'ADMIN_ANNOUNCEMENT'
+  | 'SCHEDULE_CHANGE'
+  | 'NEW_INTERNAL_MESSAGE';
 
 export type NavSection =
   | 'dashboard'
   | 'students'
   | 'courses'
   | 'payments'
+  | 'reminders'
   | 'approvals'
   | 'receipts'
   | 'accounting'
+  | 'reports'
   | 'attendance'
-  | 'reminders'
+  | 'messages'
+  | 'communications'
   | 'staff'
   | 'audit'
   | 'setup';
+
+export type StudentPaymentCategory = 'FULLY_PAID' | 'PARTIALLY_PAID' | 'UNPAID' | 'OVERDUE';
+
+export type FinancialAdjustmentType =
+  | 'REFUND'
+  | 'REVERSAL'
+  | 'SCHOLARSHIP_DISCOUNT'
+  | 'FEE_ADJUSTMENT';
 
 export interface RoleRecord {
   id: string;
@@ -59,9 +77,58 @@ export interface StaffProfile {
   phone?: string;
   role: RoleCode;
   linkedStudentId?: string;
+  allowedModules?: NavSection[];
+  canExportReports?: boolean;
+  lastLoginAt?: string;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FinancialAdjustment {
+  id: string;
+  adjustmentRef: string;
+  enrollmentId: string;
+  studentId: string;
+  studentCode: string;
+  studentName: string;
+  courseId: string;
+  courseName: string;
+  paymentId?: string;
+  type: FinancialAdjustmentType;
+  amountEtb: number;
+  effectiveDate: string;
+  reason: string;
+  approvedBy: string;
+  approvedByName: string;
+  createdAt: string;
+}
+
+export interface SecurityConfig {
+  id: string;
+  adminTimeoutMinutes: number;
+  userTimeoutMinutes: number;
+  warningBeforeSeconds: number;
+  maxFailedLogins: number;
+  lockoutMinutes: number;
+  enforceAuditOnExports: boolean;
+  updatedBy?: string;
+  updatedByName?: string;
+  updatedAt: string;
+}
+
+export interface LoginHistoryRecord {
+  id: string;
+  userId: string;
+  email: string;
+  fullName: string;
+  role: RoleCode;
+  eventType: 'LOGIN' | 'LOGOUT' | 'SESSION_EXPIRED' | 'FAILED_LOGIN' | 'LOCKOUT';
+  authMethod: 'EMAIL_PASSWORD' | 'GOOGLE' | 'SYSTEM';
+  userAgent?: string;
+  sessionId?: string;
+  detail?: string;
+  createdAt: string;
 }
 
 export interface Course {
@@ -102,6 +169,8 @@ export interface Student {
   courseId: string;
   courseName: string;
   enrollmentDate: string;
+  registrationDateEthiopian?: string;
+  registrationTimeEat?: string;
   courseFeeEtb: number;
   paymentPlanCode: PaymentPlanCode;
   registrationStatus: RegistrationStatus;
@@ -244,6 +313,9 @@ export interface PortalNotification {
   title: string;
   message: string;
   targetRole: RoleCode | 'ALL';
+  recipientUid?: string;
+  category?: string;
+  actionSection?: string;
   entityType?: string;
   entityId?: string;
   studentId?: string;
@@ -291,6 +363,167 @@ export interface AuditLog {
   entityType: string;
   entityId: string;
   summary: string;
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// SMS Gateway, Unified Notification Engine & Internal Messaging Models
+// ---------------------------------------------------------------------------
+
+export type SmsProviderCode = 'afromessage' | 'geezsms' | 'twilio' | 'africastalking';
+
+export type CommunicationEventType =
+  | 'REGISTRATION_APPROVED'
+  | 'PAYMENT_REMINDER'
+  | 'PAYMENT_OVERDUE'
+  | 'PAYMENT_APPROVED'
+  | 'COURSE_ANNOUNCEMENT'
+  | 'ATTENDANCE_UPDATE'
+  | 'INSTRUCTOR_MESSAGE'
+  | 'ADMIN_ANNOUNCEMENT';
+
+export type SmsDeliveryStatus =
+  | 'PENDING'
+  | 'SENT'
+  | 'DELIVERED'
+  | 'FAILED'
+  | 'TEST_SIMULATED';
+
+export interface SmsSystemConfig {
+  id: string;
+  ownerPhoneNumber: string;
+  activeProvider: SmsProviderCode;
+  senderId?: string;
+  smsEnabled: boolean;
+  portalNotificationsEnabled: boolean;
+  internalMessagingEnabled: boolean;
+  testMode: boolean;
+  allowStudentToInstructor: boolean;
+  allowStudentToAdmin: boolean;
+  allowStudentToStudent: boolean;
+  allowAttachments: boolean;
+  updatedBy?: string;
+  updatedByName?: string;
+  updatedAt: string;
+}
+
+export interface CommunicationPolicy {
+  id: string;
+  portalNotificationsEnabled: boolean;
+  internalMessagingEnabled: boolean;
+  allowStudentToInstructor: boolean;
+  allowStudentToAdmin: boolean;
+  allowStudentToStudent: boolean;
+  allowAttachments: boolean;
+  updatedAt: string;
+}
+
+export interface SmsTemplate {
+  id: string;
+  eventType: CommunicationEventType;
+  name: string;
+  body: string;
+  isActive: boolean;
+  updatedBy?: string;
+  updatedAt: string;
+}
+
+export interface SmsLog {
+  id: string;
+  dedupKey?: string;
+  eventType: CommunicationEventType;
+  recipientName: string;
+  recipientPhone: string;
+  studentId?: string;
+  studentCode?: string;
+  courseName?: string;
+  templateId?: string;
+  messageBody: string;
+  provider: SmsProviderCode;
+  mode: 'LIVE' | 'TEST';
+  status: SmsDeliveryStatus;
+  providerMessageId?: string;
+  errorMessage?: string;
+  retryCount: number;
+  sentBy: string;
+  sentByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotificationChannelRule {
+  id: string;
+  eventType: CommunicationEventType;
+  label: string;
+  description: string;
+  smsEnabled: boolean;
+  portalEnabled: boolean;
+  internalMessageEnabled: boolean;
+  updatedAt: string;
+}
+
+export interface DirectoryUser {
+  id: string;
+  uid: string;
+  fullName: string;
+  role: RoleCode;
+  linkedStudentId?: string;
+  studentCode?: string;
+  courseId?: string;
+  courseName?: string;
+  isActive: boolean;
+  lastSeenAt: string;
+  updatedAt: string;
+}
+
+export type ConversationType = 'DIRECT' | 'GROUP' | 'BROADCAST';
+
+export type BroadcastAudience =
+  | 'ALL_USERS'
+  | 'ALL_STUDENTS'
+  | 'ALL_INSTRUCTORS'
+  | 'ALL_ACCOUNTANTS'
+  | 'ALL_STAFF'
+  | 'COURSE'
+  | 'CUSTOM';
+
+export interface Conversation {
+  id: string;
+  type: ConversationType;
+  title: string;
+  description?: string;
+  participantIds: string[];
+  participantLabels: string[]; // "uid|Name|Role" bounded parallel list for crisp display without PII lookup
+  courseId?: string;
+  courseName?: string;
+  broadcastAudience?: BroadcastAudience;
+  createdBy: string;
+  createdByName: string;
+  createdByRole: RoleCode;
+  lastMessageText?: string;
+  lastMessageAt?: string;
+  lastMessageBy?: string;
+  lastMessageByName?: string;
+  readByUids: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InternalMessage {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  senderName: string;
+  senderRole: RoleCode;
+  body: string;
+  replyToId?: string;
+  replyToSender?: string;
+  replyToPreview?: string;
+  attachmentName?: string;
+  attachmentType?: string;
+  attachmentSize?: number;
+  attachmentDataUrl?: string;
+  readByUids: string[];
   createdAt: string;
 }
 

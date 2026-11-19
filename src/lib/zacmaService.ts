@@ -11,6 +11,8 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase';
+import { formatAddisTime, formatEthiopianDate } from './ethiopianCalendar';
+import { triggerAutomatedEventSms } from './communicationService';
 import {
   addDaysIso,
   AttendanceRecord,
@@ -113,6 +115,9 @@ export async function registerStudentWithPlan(
   try {
     const batch = writeBatch(db);
 
+    const registrationDateEthiopian = formatEthiopianDate(input.enrollmentDate);
+    const registrationTimeEat = formatAddisTime(now);
+
     const studentDoc = cleanObject({
       studentCode,
       fullName: input.fullName.trim().slice(0, 120),
@@ -124,6 +129,8 @@ export async function registerStudentWithPlan(
       courseId: input.course.id,
       courseName: input.course.name.slice(0, 120),
       enrollmentDate: input.enrollmentDate,
+      registrationDateEthiopian,
+      registrationTimeEat,
       courseFeeEtb: input.course.feeEtb,
       paymentPlanCode: input.paymentPlan.code,
       registrationStatus: 'PENDING',
@@ -279,6 +286,25 @@ export async function approveStudentRegistration(
         updatedAt: now,
       });
     }
+    batch.set(
+      doc(db, 'notifications', makeId('not_reg_app')),
+      cleanObject({
+        type: 'REGISTRATION_APPROVED',
+        title: `Welcome to ZACMA — Registration Approved`,
+        message: `Congratulations ${student.fullName}! Your enrollment (${student.studentCode}) for ${student.courseName} has been approved by Administration.`,
+        targetRole: 'STUDENT',
+        category: 'ADMIN',
+        studentId: student.id,
+        studentCode: student.studentCode,
+        studentName: student.fullName,
+        courseName: student.courseName,
+        dedupKey: `REG_APPROVED|${student.id}`,
+        entityType: 'student',
+        entityId: student.id,
+        isRead: false,
+        createdAt: now,
+      })
+    );
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
@@ -290,6 +316,24 @@ export async function approveStudentRegistration(
       createdAt: now,
     });
     await batch.commit();
+
+    // Non-blocking automated welcome SMS via Unified Notification Engine (deduplicated)
+    void triggerAutomatedEventSms({
+      eventType: 'REGISTRATION_APPROVED',
+      dedupKey: `SMS_REG_APPROVED|${student.id}`,
+      student: {
+        id: student.id,
+        studentCode: student.studentCode,
+        fullName: student.fullName,
+        phone: student.phone,
+        courseName: student.courseName,
+      },
+      vars: {
+        amount: student.courseFeeEtb,
+        balance: enrollment?.remainingBalanceEtb ?? student.courseFeeEtb,
+      },
+      actor,
+    });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `students/${student.id}`);
   }
@@ -721,6 +765,27 @@ export async function approvePaymentTransaction(
     } catch {
       // Non-fatal: payment approval already committed atomically
     }
+
+    // Non-blocking automated Payment Confirmation SMS (deduplicated per paymentId)
+    if (studentPhone) {
+      void triggerAutomatedEventSms({
+        eventType: 'PAYMENT_APPROVED',
+        dedupKey: `SMS_PAY_APPROVED|${payment.id}`,
+        student: {
+          id: payment.studentId,
+          studentCode: payment.studentCode,
+          fullName: payment.studentName,
+          phone: studentPhone,
+          courseName: payment.courseName,
+        },
+        vars: {
+          amount: payment.amountEtb,
+          balance: newRemaining,
+          receiptNumber,
+        },
+        actor,
+      });
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `payments/${payment.id}`);
   }
@@ -957,6 +1022,29 @@ export async function saveDailyAttendanceBatch(
           })
         );
       }
+      // Notify student on ABSENT or LATE attendance record so Student Portal stays up to date
+      if (item.status === 'ABSENT' || item.status === 'LATE') {
+        const ethDate = formatEthiopianDate(attendanceDate);
+        batch.set(
+          doc(db, 'notifications', `not_att_${item.enrollment.id}_${attendanceDate.replace(/-/g, '')}`),
+          cleanObject({
+            type: 'ATTENDANCE_UPDATE',
+            title: `Attendance Recorded: ${item.status} (${course.name})`,
+            message: `Your attendance on ${attendanceDate} (${ethDate} E.C.) for ${course.name} was marked ${item.status} by ${actor.fullName}.${item.remarks ? ` Note: ${item.remarks}` : ''}`,
+            targetRole: 'STUDENT',
+            category: 'ATTENDANCE',
+            studentId: item.enrollment.studentId,
+            studentCode: item.enrollment.studentCode,
+            studentName: item.enrollment.studentName,
+            courseName: course.name,
+            dedupKey: `ATT|${item.enrollment.id}|${attendanceDate}`,
+            entityType: 'attendance',
+            entityId: attId,
+            isRead: false,
+            createdAt: now,
+          })
+        );
+      }
     }
 
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
@@ -983,6 +1071,8 @@ export async function saveStaffProfile(
     phone?: string;
     role: RoleCode;
     linkedStudentId?: string;
+    allowedModules?: string[];
+    canExportReports?: boolean;
     isActive: boolean;
     createdAt?: string;
   },
@@ -993,6 +1083,13 @@ export async function saveStaffProfile(
   }
   const now = new Date().toISOString();
   const profileId = input.id || makeId('staff');
+  const allowedModules =
+    input.role === 'GENERAL_STAFF' && Array.isArray(input.allowedModules) && input.allowedModules.length > 0
+      ? input.allowedModules.slice(0, 16)
+      : undefined;
+  const canExportReports =
+    input.role === 'ACCOUNTANT' ? Boolean(input.canExportReports) : undefined;
+
   try {
     const batch = writeBatch(db);
     batch.set(
@@ -1004,6 +1101,8 @@ export async function saveStaffProfile(
         phone: input.phone?.trim().slice(0, 30),
         role: input.role,
         linkedStudentId: input.role === 'STUDENT' ? input.linkedStudentId?.trim() : undefined,
+        allowedModules,
+        canExportReports,
         isActive: input.isActive,
         createdAt: input.createdAt || now,
         updatedAt: now,
@@ -1016,7 +1115,9 @@ export async function saveStaffProfile(
       action: input.id ? 'STAFF_ROLE_UPDATED' : 'STAFF_ADDED',
       entityType: 'profile',
       entityId: profileId,
-      summary: `${input.id ? 'Updated' : 'Added'} account ${input.fullName.trim()} (${input.role}, ${input.isActive ? 'Active' : 'Suspended'}).`,
+      summary: `${input.id ? 'Updated' : 'Added'} account ${input.fullName.trim()} (${input.role}, ${input.isActive ? 'Active' : 'Suspended'}${
+        canExportReports ? ', Excel Export Authorized' : ''
+      }${allowedModules ? `, Modules: ${allowedModules.join(', ')}` : ''}).`.slice(0, 400),
       createdAt: now,
     });
     await batch.commit();

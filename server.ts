@@ -10,8 +10,19 @@ import {
   handleHealth,
   handleRecordReminderRun,
   handleSetupStatus,
+  handleSmsBalance,
+  handleSmsSend,
+  handleSmsStatus,
   recordScheduledHeartbeat,
+  ServerSmsProvider,
 } from './server/handlers.ts';
+import {
+  handleLoginAttempt,
+  handleSessionCreate,
+  handleSessionLogout,
+  handleSessionRefresh,
+  handleSessionValidate,
+} from './server/sessionManager.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -84,11 +95,76 @@ async function createApp() {
     res.status(out.status).json(out.body);
   });
 
+  app.get('/api/sms/status', (_req: Request, res: Response) => {
+    const out = handleSmsStatus();
+    res.status(out.status).json(out.body);
+  });
+
+  app.get('/api/sms/balance', async (req: Request, res: Response) => {
+    const provider = typeof req.query.provider === 'string'
+      ? (req.query.provider as ServerSmsProvider)
+      : undefined;
+    const out = await handleSmsBalance(provider);
+    res.status(out.status).json(out.body);
+  });
+
+  app.post('/api/sms/send', async (req: Request, res: Response) => {
+    const out = await handleSmsSend(req.body);
+    res.status(out.status).json(out.body);
+  });
+
+  // Enterprise Session Management & Account Lockout Routes (HttpOnly signed cookies + no-store)
+  const isSecureReq = (req: Request) =>
+    process.env.NODE_ENV === 'production' ||
+    req.secure ||
+    req.headers['x-forwarded-proto'] === 'https';
+
+  const applySessionHeaders = (res: Response, setCookie?: string) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+    if (setCookie) {
+      res.setHeader('Set-Cookie', setCookie);
+    }
+  };
+
+  app.post('/api/session/create', (req: Request, res: Response) => {
+    const out = handleSessionCreate(req.body || {}, isSecureReq(req));
+    applySessionHeaders(res, out.setCookie);
+    res.status(out.status).json(out.body);
+  });
+
+  app.get('/api/session/validate', (req: Request, res: Response) => {
+    const out = handleSessionValidate(req.headers.cookie);
+    applySessionHeaders(res, out.setCookie);
+    res.status(out.status).json(out.body);
+  });
+
+  app.post('/api/session/refresh', (req: Request, res: Response) => {
+    const out = handleSessionRefresh(req.headers.cookie, req.body || {}, isSecureReq(req));
+    applySessionHeaders(res, out.setCookie);
+    res.status(out.status).json(out.body);
+  });
+
+  app.post('/api/session/logout', (req: Request, res: Response) => {
+    const out = handleSessionLogout(req.headers.cookie, isSecureReq(req));
+    applySessionHeaders(res, out.setCookie);
+    res.status(out.status).json(out.body);
+  });
+
+  app.post('/api/session/login-attempt', (req: Request, res: Response) => {
+    const out = handleLoginAttempt(req.body || {});
+    applySessionHeaders(res);
+    res.status(out.status).json(out.body);
+  });
+
   // Mount Vite middleware in development or serve built dist in production
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

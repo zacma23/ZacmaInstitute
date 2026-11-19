@@ -1,7 +1,9 @@
 import React from 'react';
 import { Printer, ShieldCheck, X } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { formatDateShort, formatEtb, Receipt } from '../types/zacma';
+import { formatEtb, Receipt } from '../types/zacma';
+import { formatDualDate } from '../lib/ethiopianCalendar';
+import { ZacmaLogo } from './ZacmaLogo';
 
 export function ReceiptModal({
   receipt,
@@ -11,6 +13,9 @@ export function ReceiptModal({
   onClose: () => void;
 }) {
   if (!receipt) return null;
+
+  const issuedDual = formatDualDate(receipt.issuedAt, false);
+  const paymentDual = formatDualDate(receipt.paymentDate, false);
 
   const qrPayload = JSON.stringify({
     org: 'ZACMA Technology & Training Institute',
@@ -54,15 +59,13 @@ export function ReceiptModal({
 
         <div id="zacma-printable-receipt" className="p-8 bg-white text-slate-900">
           {/* Institutional Header */}
-          <div className="flex items-start justify-between gap-6 pb-6 border-b-2 border-blue-700">
+          <div className="flex items-start justify-between gap-6 pb-5">
             <div>
-              <div className="flex items-center gap-2.5 mb-2">
-                <div className="w-9 h-9 rounded-lg bg-blue-700 text-white font-display font-extrabold text-sm flex items-center justify-center tracking-tight">
-                  ZT
-                </div>
+              <div className="flex items-center gap-3 mb-2">
+                <ZacmaLogo variant="mark" size="lg" framed />
                 <div>
                   <h1 className="text-base sm:text-lg font-extrabold text-slate-900 tracking-tight leading-tight">
-                    ZACMA TECHNOLOGY &amp; TRAINING INSTITUTE
+                    ZACMA <span className="text-blue-700">TECHNOLOGY</span> &amp; TRAINING INSTITUTE
                   </h1>
                   <p className="text-xs text-slate-500">
                     Office of the Registrar &amp; Student Accounts · Addis Ababa, Ethiopia
@@ -80,11 +83,15 @@ export function ReceiptModal({
               <p className="text-base font-mono font-bold text-slate-900 tabular-nums mt-0.5">
                 {receipt.receiptNumber}
               </p>
-              <p className="text-xs text-slate-500 mt-1">
-                Issued: {formatDateShort(receipt.issuedAt)}
+              <p className="text-xs text-slate-600 mt-1">
+                Issued: {issuedDual.gregorian}
+              </p>
+              <p className="text-[11px] text-[#172DEB] font-medium">
+                {issuedDual.ethiopian} E.C.
               </p>
             </div>
           </div>
+          <div className="h-1 w-full zacma-brand-stripe rounded-full mb-1" />
 
           {/* Student & Payment Metadata Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 py-6 border-b border-slate-200 text-sm">
@@ -112,7 +119,10 @@ export function ReceiptModal({
               <p className="text-xs text-slate-600">
                 Payment Date:{' '}
                 <span className="font-semibold text-slate-900">
-                  {formatDateShort(receipt.paymentDate)}
+                  {paymentDual.gregorian}
+                </span>{' '}
+                <span className="text-[#172DEB] font-medium">
+                  ({paymentDual.ethiopian} E.C.)
                 </span>
               </p>
               <p className="text-xs text-slate-600">

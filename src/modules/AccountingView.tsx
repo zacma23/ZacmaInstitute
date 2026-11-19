@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import {
   Download,
+  FileSpreadsheet,
   Plus,
+  RotateCcw,
   Search,
   ShieldAlert,
   Trash2,
@@ -24,20 +26,28 @@ import {
   exportRowsToCsv,
 } from '../lib/zacmaService';
 import { ConfirmDialog, EmptyState, PaginationBar, StatusLabel } from '../components/PortalUI';
+import { recordFinancialAdjustment } from '../lib/securityService';
 import {
   addDaysIso,
+  Enrollment,
   Expense,
+  FinancialAdjustmentType,
   formatDateShort,
   formatEtb,
   formatEtbCompact,
+  PaymentInstallment,
   PaymentMethod,
   todayIsoDate,
 } from '../types/zacma';
 
 type PeriodFilter = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'ANNUAL' | 'ALL';
-type AccountingTab = 'cashflow' | 'expenses' | 'by_course' | 'outstanding';
+type AccountingTab = 'cashflow' | 'expenses' | 'adjustments' | 'by_course' | 'outstanding';
 
-export function AccountingView() {
+export function AccountingView({
+  onOpenReports,
+}: {
+  onOpenReports?: () => void;
+} = {}) {
   const {
     profile,
     effectiveRole,
@@ -47,6 +57,7 @@ export function AccountingView() {
     payments,
     expenses,
     expenseCategories,
+    financialAdjustments,
     pushToast,
   } = usePortal();
 
@@ -55,10 +66,12 @@ export function AccountingView() {
   const [expenseSearch, setExpenseSearch] = useState('');
   const [expenseCatFilter, setExpenseCatFilter] = useState('ALL');
   const [outstandingSearch, setOutstandingSearch] = useState('');
+  const [adjustmentSearch, setAdjustmentSearch] = useState('');
   const [expPage, setExpPage] = useState(1);
 
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
   const [deletingExpense, setDeletingExpense] = useState<Expense | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -97,8 +110,17 @@ export function AccountingView() {
     [expenses, period, today]
   );
 
+  const periodAdjustments = useMemo(
+    () => financialAdjustments.filter((a) => inPeriod(a.effectiveDate)),
+    [financialAdjustments, period, today]
+  );
+
   const summary = useMemo(() => {
-    const approvedIncome = periodApprovedPayments.reduce((acc, p) => acc + p.amountEtb, 0);
+    const grossApprovedIncome = periodApprovedPayments.reduce((acc, p) => acc + p.amountEtb, 0);
+    const refundsAndReversals = periodAdjustments
+      .filter((a) => a.type === 'REFUND' || a.type === 'REVERSAL')
+      .reduce((acc, a) => acc + a.amountEtb, 0);
+    const approvedIncome = Math.max(0, Number((grossApprovedIncome - refundsAndReversals).toFixed(2)));
     const totalExpenses = periodExpenses.reduce((acc, e) => acc + e.amountEtb, 0);
     const pendingExcluded = payments
       .filter((p) => p.status === 'PENDING' && inPeriod(p.paymentDate))
@@ -109,18 +131,19 @@ export function AccountingView() {
 
     return {
       approvedIncome,
+      refundsAndReversals,
       totalExpenses,
       netCashFlow: approvedIncome - totalExpenses,
       pendingExcluded,
       outstandingTotal,
     };
-  }, [periodApprovedPayments, periodExpenses, payments, enrollments, period, today]);
+  }, [periodApprovedPayments, periodAdjustments, periodExpenses, payments, enrollments, period, today]);
 
   const cashFlowLedger = useMemo(() => {
     const rows: Array<{
       id: string;
       date: string;
-      type: 'INCOME' | 'EXPENSE';
+      type: 'INCOME' | 'REFUND' | 'EXPENSE';
       reference: string;
       description: string;
       method: string;
@@ -138,6 +161,18 @@ export function AccountingView() {
         amountEtb: p.amountEtb,
       });
     }
+    for (const a of periodAdjustments) {
+      if (a.type !== 'REFUND' && a.type !== 'REVERSAL') continue;
+      rows.push({
+        id: `adj_${a.id}`,
+        date: a.effectiveDate,
+        type: 'REFUND',
+        reference: a.adjustmentRef,
+        description: `${a.type}: ${a.studentName} (${a.studentCode}) — ${a.reason}`,
+        method: 'Controlled Adjustment',
+        amountEtb: -a.amountEtb,
+      });
+    }
     for (const e of periodExpenses) {
       rows.push({
         id: `exp_${e.id}`,
@@ -150,7 +185,22 @@ export function AccountingView() {
       });
     }
     return rows.sort((a, b) => b.date.localeCompare(a.date));
-  }, [periodApprovedPayments, periodExpenses]);
+  }, [periodApprovedPayments, periodAdjustments, periodExpenses]);
+
+  const filteredAdjustments = useMemo(() => {
+    const q = adjustmentSearch.trim().toLowerCase();
+    return periodAdjustments.filter((a) => {
+      if (!q) return true;
+      return (
+        a.adjustmentRef.toLowerCase().includes(q) ||
+        a.studentName.toLowerCase().includes(q) ||
+        a.studentCode.toLowerCase().includes(q) ||
+        a.courseName.toLowerCase().includes(q) ||
+        a.reason.toLowerCase().includes(q) ||
+        a.type.toLowerCase().includes(q)
+      );
+    });
+  }, [periodAdjustments, adjustmentSearch]);
 
   const revenueByCourse = useMemo(() => {
     return courses
@@ -279,11 +329,14 @@ export function AccountingView() {
       {/* Financial Summary KPI Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <p className="text-xs font-medium text-slate-500">Approved Income ({period.toLowerCase()})</p>
+          <p className="text-xs font-medium text-slate-500">Net Approved Income ({period.toLowerCase()})</p>
           <p className="text-xl font-mono font-bold text-emerald-700 tabular-nums mt-1.5">
             {formatEtb(summary.approvedIncome)}
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">
+          <p className="text-[11px] text-slate-500 mt-1 tabular-nums">
+            {summary.refundsAndReversals > 0
+              ? `Refunds/Reversals: -${formatEtbCompact(summary.refundsAndReversals)} · `
+              : ''}
             Pending excluded: {formatEtbCompact(summary.pendingExcluded)}
           </p>
         </div>
@@ -325,6 +378,7 @@ export function AccountingView() {
             [
               ['cashflow', 'Cash-Flow Statement'],
               ['expenses', 'Expenses & Categories'],
+              ['adjustments', `Refunds & Adjustments (${periodAdjustments.length})`],
               ['by_course', 'Revenue by Course'],
               ['outstanding', 'Outstanding Student Fees'],
             ] as const
@@ -344,7 +398,17 @@ export function AccountingView() {
           ))}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {onOpenReports && (isAdmin || Boolean(profile?.canExportReports)) && (
+            <button
+              type="button"
+              onClick={onOpenReports}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-blue-800 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              Excel (.xlsx) Center
+            </button>
+          )}
           {tab === 'cashflow' && (
             <button
               type="button"
@@ -363,6 +427,16 @@ export function AccountingView() {
             >
               <Download className="w-3.5 h-3.5" />
               Export CSV
+            </button>
+          )}
+          {tab === 'adjustments' && isAdmin && (
+            <button
+              type="button"
+              onClick={() => setShowAdjustmentModal(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Issue Refund / Adjustment
             </button>
           )}
           {tab === 'expenses' && isAdmin && (
@@ -415,8 +489,20 @@ export function AccountingView() {
                         {formatDateShort(r.date)}
                       </td>
                       <td className="py-3 px-3 font-semibold">
-                        <span className={r.type === 'INCOME' ? 'text-emerald-700' : 'text-red-700'}>
-                          {r.type === 'INCOME' ? 'Approved Income' : 'Expense'}
+                        <span
+                          className={
+                            r.type === 'INCOME'
+                              ? 'text-emerald-700'
+                              : r.type === 'REFUND'
+                              ? 'text-amber-700'
+                              : 'text-red-700'
+                          }
+                        >
+                          {r.type === 'INCOME'
+                            ? 'Approved Income'
+                            : r.type === 'REFUND'
+                            ? 'Refund / Reversal'
+                            : 'Expense'}
                         </span>
                       </td>
                       <td className="py-3 px-3 font-mono text-slate-700">{r.reference}</td>
@@ -542,27 +628,116 @@ export function AccountingView() {
         </div>
       )}
 
+      {/* Tab 2b: Controlled Refunds, Reversals & Adjustments (Immutable Ledger) */}
+      {tab === 'adjustments' && (
+        <div className="space-y-4">
+          <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="relative flex-1 min-w-[220px] max-w-sm">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={adjustmentSearch}
+                onChange={(e) => setAdjustmentSearch(e.target.value)}
+                placeholder="Search ref, student, course, reason..."
+                className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg"
+              />
+            </div>
+            <p className="text-xs text-slate-500">
+              Approved payments are never deleted. Refunds, reversals, and fee adjustments are recorded here and atomically recalculate balances.
+            </p>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+            {filteredAdjustments.length === 0 ? (
+              <EmptyState
+                title="No financial adjustments recorded"
+                description="Controlled refunds, reversals, scholarship discounts, and fee adjustments authorized by an Admin appear in this immutable ledger."
+                actionLabel={isAdmin ? 'Issue Refund / Adjustment' : undefined}
+                onAction={isAdmin ? () => setShowAdjustmentModal(true) : undefined}
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-semibold text-slate-500">
+                      <th className="py-3 px-4">Reference &amp; Date</th>
+                      <th className="py-3 px-3">Student &amp; Course</th>
+                      <th className="py-3 px-3">Adjustment Type</th>
+                      <th className="py-3 px-3">Audit Reason</th>
+                      <th className="py-3 px-3">Authorized By</th>
+                      <th className="py-3 px-4 text-right">Amount (ETB)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {filteredAdjustments.map((adj) => (
+                      <tr key={adj.id} className="hover:bg-slate-50/80">
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <p className="font-mono font-semibold text-slate-900">{adj.adjustmentRef}</p>
+                          <p className="text-[11px] text-slate-500">{formatDateShort(adj.effectiveDate)}</p>
+                        </td>
+                        <td className="py-3 px-3">
+                          <p className="font-semibold text-slate-900">{adj.studentName}</p>
+                          <p className="text-[11px] text-slate-500">
+                            <span className="font-mono">{adj.studentCode}</span> · {adj.courseName}
+                          </p>
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap font-mono font-semibold">
+                          <span
+                            className={
+                              adj.type === 'REFUND' || adj.type === 'REVERSAL'
+                                ? 'text-red-600'
+                                : adj.type === 'SCHOLARSHIP_DISCOUNT'
+                                ? 'text-emerald-700'
+                                : 'text-blue-700'
+                            }
+                          >
+                            {adj.type.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-slate-700 max-w-xs">{adj.reason}</td>
+                        <td className="py-3 px-3 text-slate-600 whitespace-nowrap">{adj.approvedByName}</td>
+                        <td className="py-3 px-4 text-right font-mono font-bold tabular-nums whitespace-nowrap text-slate-900">
+                          {formatEtb(adj.amountEtb)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Tab 3: Revenue by Course */}
       {tab === 'by_course' && (
         <div className="space-y-6">
-          <div className="bg-white border border-slate-200 rounded-xl p-5">
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
             <h3 className="text-sm font-bold text-slate-900 mb-4">
               Approved Tuition Revenue by Course (ETB)
             </h3>
             <div className="h-64 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={revenueByCourse} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                  <XAxis dataKey="shortName" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" vertical={false} />
+                  <XAxis dataKey="shortName" tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} />
                   <YAxis
                     axisLine={false}
                     tickLine={false}
-                    tick={{ fontSize: 11, fill: '#64748b' }}
+                    tick={{ fontSize: 11, fill: '#64748B' }}
                     tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`}
                   />
-                  <Tooltip formatter={(val: unknown) => formatEtb(Number(val || 0))} />
-                  <Bar dataKey="approvedCollected" name="Approved Revenue" fill="#1d4ed8" radius={[4, 4, 0, 0]} maxBarSize={42} />
-                  <Bar dataKey="outstanding" name="Outstanding" fill="#dc2626" radius={[4, 4, 0, 0]} maxBarSize={42} />
+                  <Tooltip
+                    contentStyle={{
+                      borderRadius: '0.75rem',
+                      borderColor: '#E5E7EB',
+                      boxShadow: '0 4px 12px rgba(17, 24, 39, 0.08)',
+                      fontSize: '12px',
+                    }}
+                    formatter={(val: unknown) => formatEtb(Number(val || 0))}
+                  />
+                  <Bar dataKey="approvedCollected" name="Approved Revenue" fill="#172DEB" radius={[5, 5, 0, 0]} maxBarSize={42} />
+                  <Bar dataKey="outstanding" name="Outstanding" fill="#E51B23" radius={[5, 5, 0, 0]} maxBarSize={42} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -717,6 +892,35 @@ export function AccountingView() {
             });
             pushToast('success', `Added expense category "${data.name}".`);
             setShowCategoryModal(false);
+          }}
+        />
+      )}
+
+      {/* Controlled Refund / Financial Adjustment Modal (Admin Only) */}
+      {showAdjustmentModal && profile && isAdmin && (
+        <FinancialAdjustmentModal
+          enrollments={enrollments.filter((e) => e.status !== 'REJECTED')}
+          installments={installments}
+          onClose={() => setShowAdjustmentModal(false)}
+          onSave={async (payload) => {
+            try {
+              const res = await recordFinancialAdjustment(payload, {
+                uid: profile.uid,
+                fullName: profile.fullName,
+                role: profile.role,
+              });
+              pushToast(
+                'success',
+                `Authorized ${payload.type.replace(/_/g, ' ')} (${res.adjustmentRef}). Balances recalculated.`
+              );
+              setShowAdjustmentModal(false);
+            } catch (err) {
+              pushToast(
+                'error',
+                err instanceof Error ? err.message : 'Unable to record financial adjustment.'
+              );
+              throw err;
+            }
           }}
         />
       )}
@@ -982,3 +1186,171 @@ function CategoryModal({
     </div>
   );
 }
+
+function FinancialAdjustmentModal({
+  enrollments,
+  installments,
+  onClose,
+  onSave,
+}: {
+  enrollments: Enrollment[];
+  installments: PaymentInstallment[];
+  onClose: () => void;
+  onSave: (data: {
+    enrollment: Enrollment;
+    installments: PaymentInstallment[];
+    type: FinancialAdjustmentType;
+    amountEtb: number;
+    effectiveDate: string;
+    reason: string;
+  }) => Promise<void>;
+}) {
+  const [enrollmentId, setEnrollmentId] = useState(enrollments[0]?.id || '');
+  const [type, setType] = useState<FinancialAdjustmentType>('REFUND');
+  const [amountEtb, setAmountEtb] = useState('');
+  const [effectiveDate, setEffectiveDate] = useState(todayIsoDate());
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const selectedEnrollment = enrollments.find((e) => e.id === enrollmentId) || null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEnrollment || Number(amountEtb) <= 0 || reason.trim().length < 4) return;
+    setSaving(true);
+    try {
+      await onSave({
+        enrollment: selectedEnrollment,
+        installments,
+        type,
+        amountEtb: Number(amountEtb),
+        effectiveDate,
+        reason: reason.trim(),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[1px] flex items-center justify-center p-4">
+      <div className="bg-white border border-slate-200 rounded-xl max-w-lg w-full shadow-2xl overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+          <div>
+            <h3 className="text-base font-display font-bold text-slate-900">
+              Controlled Financial Refund / Adjustment
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Immutable ledger entry — approved payments are preserved for audit compliance.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-700 p-1">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <form onSubmit={(e) => void handleSubmit(e)} className="p-6 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Student Enrollment
+            </label>
+            <select
+              value={enrollmentId}
+              onChange={(e) => setEnrollmentId(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+            >
+              {enrollments.map((enr) => (
+                <option key={enr.id} value={enr.id}>
+                  {enr.studentCode} — {enr.studentName} ({enr.courseName})
+                </option>
+              ))}
+            </select>
+            {selectedEnrollment && (
+              <p className="text-[11px] font-mono text-slate-600 mt-1.5 tabular-nums">
+                Agreed: {formatEtb(selectedEnrollment.agreedFeeEtb)} · Paid:{' '}
+                {formatEtb(selectedEnrollment.approvedPaidEtb)} · Balance:{' '}
+                {formatEtb(selectedEnrollment.remainingBalanceEtb)}
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Adjustment Type
+              </label>
+              <select
+                value={type}
+                onChange={(e) => setType(e.target.value as FinancialAdjustmentType)}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+              >
+                <option value="REFUND">Refund (Reduces Collected)</option>
+                <option value="REVERSAL">Payment Reversal (Reduces Collected)</option>
+                <option value="SCHOLARSHIP_DISCOUNT">Scholarship / Discount (Reduces Fee)</option>
+                <option value="FEE_ADJUSTMENT">Additional Fee Adjustment (Increases Fee)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Effective Date
+              </label>
+              <input
+                type="date"
+                required
+                value={effectiveDate}
+                onChange={(e) => setEffectiveDate(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Amount (ETB)</label>
+            <input
+              type="number"
+              required
+              min={1}
+              step="0.01"
+              value={amountEtb}
+              onChange={(e) => setAmountEtb(e.target.value)}
+              placeholder="0.00"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg font-mono"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Mandatory Audit Justification
+            </label>
+            <textarea
+              rows={3}
+              required
+              minLength={4}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Explain why this refund, reversal, or adjustment is authorized..."
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+            />
+          </div>
+
+          <div className="pt-4 border-t border-slate-200 flex justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-xs font-semibold text-slate-700 border border-slate-300 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving || !selectedEnrollment}
+              className="px-4 py-2 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg disabled:opacity-50"
+            >
+              {saving ? 'Authorizing...' : 'Authorize Adjustment'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+

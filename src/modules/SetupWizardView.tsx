@@ -52,6 +52,12 @@ interface SetupStatusPayload {
       envVar: string;
     };
     supabase: {
+      projectRef?: string;
+      url?: string;
+      host?: string;
+      port?: number;
+      database?: string;
+      user?: string;
       urlConfigured: boolean;
       anonKeyConfigured: boolean;
       serviceRoleConfigured: boolean;
@@ -97,23 +103,23 @@ const ENV_CONNECTOR_LINKS: Record<string, EnvConnectorLink> = {
     integrateLabel: 'Vercel Settings',
   },
   SUPABASE_URL: {
-    providerLabel: 'Supabase',
-    signupUrl: 'https://supabase.com/dashboard/sign-up',
-    loginUrl: 'https://supabase.com/dashboard/projects',
+    providerLabel: 'Supabase (mcxbwxfvalodqgbwyobo)',
+    signupUrl: 'https://supabase.com/dashboard/project/mcxbwxfvalodqgbwyobo/settings/api',
+    loginUrl: 'https://supabase.com/dashboard/project/mcxbwxfvalodqgbwyobo/settings/database',
     integrateUrl: 'https://vercel.com/integrations/supabase',
     integrateLabel: 'Connect to Vercel',
   },
   SUPABASE_ANON_KEY: {
-    providerLabel: 'Supabase',
-    signupUrl: 'https://supabase.com/dashboard/sign-up',
-    loginUrl: 'https://supabase.com/dashboard/projects',
+    providerLabel: 'Supabase API Keys',
+    signupUrl: 'https://supabase.com/dashboard/project/mcxbwxfvalodqgbwyobo/settings/api',
+    loginUrl: 'https://supabase.com/dashboard/project/mcxbwxfvalodqgbwyobo/settings/api',
     integrateUrl: 'https://vercel.com/integrations/supabase',
     integrateLabel: 'Connect to Vercel',
   },
   SUPABASE_SERVICE_ROLE_KEY: {
-    providerLabel: 'Supabase',
-    signupUrl: 'https://supabase.com/dashboard/sign-up',
-    loginUrl: 'https://supabase.com/dashboard/projects',
+    providerLabel: 'Supabase API Keys',
+    signupUrl: 'https://supabase.com/dashboard/project/mcxbwxfvalodqgbwyobo/settings/api',
+    loginUrl: 'https://supabase.com/dashboard/project/mcxbwxfvalodqgbwyobo/settings/api',
     integrateUrl: 'https://vercel.com/integrations/supabase',
     integrateLabel: 'Connect to Vercel',
   },
@@ -256,18 +262,19 @@ export function SetupWizardView() {
     {
       id: 'supabase',
       name: 'Supabase PostgreSQL & Auth',
-      category: 'External SQL Database & RLS Target',
+      category: `Host: ${status?.providers.supabase.host || 'db.mcxbwxfvalodqgbwyobo.supabase.co'}:${status?.providers.supabase.port || 5432} · DB: ${status?.providers.supabase.database || 'postgres'} · User: ${status?.providers.supabase.user || 'postgres'}`,
       connected: Boolean(status?.providers.supabase.ready && status?.supabaseConnectivity.reachable),
       optional: false,
       detail:
-        'Create a Supabase account, sign in, or launch the official Vercel Marketplace connector to link your PostgreSQL project and sync server env vars automatically.',
+        status?.supabaseConnectivity.detail ||
+        'Target Supabase project mcxbwxfvalodqgbwyobo is wired. Open SQL Editor to run migrations 0001–0004 and copy your Anon/Service Role keys into Vercel Environment Variables.',
       icon: GitBranch,
-      signupUrl: 'https://supabase.com/dashboard/sign-up',
-      signupLabel: 'Create Supabase Account',
-      loginUrl: 'https://supabase.com/dashboard/projects',
-      loginLabel: 'Supabase Login',
+      signupUrl: `https://supabase.com/dashboard/project/${status?.providers.supabase.projectRef || 'mcxbwxfvalodqgbwyobo'}/sql/new`,
+      signupLabel: 'Open SQL Editor',
+      loginUrl: `https://supabase.com/dashboard/project/${status?.providers.supabase.projectRef || 'mcxbwxfvalodqgbwyobo'}/settings/api`,
+      loginLabel: 'API Keys',
       integrateUrl: 'https://vercel.com/integrations/supabase',
-      integrateLabel: 'Connect Supabase to Vercel',
+      integrateLabel: 'Connect to Vercel',
     },
     {
       id: 'vercel',
@@ -513,7 +520,12 @@ export function SetupWizardView() {
                 appliedVersionSet.size < 4
                   ? { label: 'Run Migrations Now', onClick: () => setConfirmOpen(true) }
                   : undefined,
-              links: [{ label: 'Supabase SQL Editor', href: 'https://supabase.com/dashboard/projects' }],
+              links: [
+                {
+                  label: 'Open Supabase SQL Editor (mcxbwxfvalodqgbwyobo)',
+                  href: `https://supabase.com/dashboard/project/${status?.providers.supabase.projectRef || 'mcxbwxfvalodqgbwyobo'}/sql/new`,
+                },
+              ],
             },
             {
               step: '3. Server-Side ZACMA AI Assistant (GEMINI_API_KEY)',
@@ -527,18 +539,24 @@ export function SetupWizardView() {
               ],
             },
             {
-              step: '4. External Supabase PostgreSQL & Vercel Cron (For GitHub -> Vercel Deployment)',
+              step: '4. External Supabase PostgreSQL (db.mcxbwxfvalodqgbwyobo.supabase.co:5432) & Vercel Cron',
               done:
                 Boolean(status?.providers.supabase.ready) &&
                 Boolean(status?.providers.cronSecretConfigured),
               detail:
                 status?.providers.supabase.ready && status?.providers.cronSecretConfigured
-                  ? 'Supabase URL, keys, and CRON_SECRET are detected on the server.'
-                  : 'Create a Supabase account or connect Supabase directly to your Vercel project via Vercel Marketplace to auto-sync database environment variables.',
+                  ? `Connected to ${status.providers.supabase.host}:${status.providers.supabase.port}/${status.providers.supabase.database} (user: ${status.providers.supabase.user}) with CRON_SECRET active.`
+                  : `Target PostgreSQL host db.mcxbwxfvalodqgbwyobo.supabase.co:5432 (database: postgres, user: postgres) is pre-configured. Add SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, and CRON_SECRET in Vercel Project Settings -> Environment Variables.`,
               links: [
-                { label: 'Sign Up Supabase', href: 'https://supabase.com/dashboard/sign-up' },
+                {
+                  label: 'Supabase API Keys',
+                  href: `https://supabase.com/dashboard/project/${status?.providers.supabase.projectRef || 'mcxbwxfvalodqgbwyobo'}/settings/api`,
+                },
+                {
+                  label: 'Supabase DB Settings',
+                  href: `https://supabase.com/dashboard/project/${status?.providers.supabase.projectRef || 'mcxbwxfvalodqgbwyobo'}/settings/database`,
+                },
                 { label: 'Connect Supabase -> Vercel', href: 'https://vercel.com/integrations/supabase' },
-                { label: 'Vercel Dashboard', href: 'https://vercel.com/dashboard' },
               ],
             },
           ].map((row) => (
@@ -775,7 +793,7 @@ export function SetupWizardView() {
                 )}
               </button>
               <a
-                href="https://supabase.com/dashboard/projects"
+                href={`https://supabase.com/dashboard/project/${status?.providers.supabase.projectRef || 'mcxbwxfvalodqgbwyobo'}/sql/new`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md transition-colors"

@@ -130,57 +130,60 @@ export function ConfirmDialog({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[1px] flex items-center justify-center p-4">
-      <div className="bg-white border border-slate-200 rounded-xl max-w-md w-full p-6 shadow-xl">
-        <div className="flex items-start justify-between gap-4 mb-3">
-          <h3 className="text-base font-bold text-slate-900">{title}</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-700 p-1 rounded-md transition-colors"
-            aria-label="Close dialog"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        <p className="text-sm text-slate-600 leading-relaxed mb-5">{description}</p>
-        <form onSubmit={handleSubmit}>
-          {requireReason && (
-            <div className="mb-5">
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                {reasonLabel} <span className="text-red-600">*</span>
-              </label>
-              <textarea
-                rows={3}
-                required
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder={reasonPlaceholder}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-700"
-              />
-            </div>
-          )}
-          <div className="flex items-center justify-end gap-2.5">
+      <div className="bg-white border border-slate-200 rounded-xl max-w-md w-full overflow-hidden shadow-xl">
+        <div className={tone === 'danger' ? 'h-1 w-full bg-red-600' : 'zacma-brand-stripe'} />
+        <div className="p-6">
+          <div className="flex items-start justify-between gap-4 mb-3">
+            <h3 className="text-base font-bold text-slate-900">{title}</h3>
             <button
               type="button"
-              disabled={loading}
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors whitespace-nowrap"
+              className="text-slate-400 hover:text-slate-700 p-1 rounded-md transition-colors"
+              aria-label="Close dialog"
             >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading || (requireReason && !reason.trim())}
-              className={`px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors whitespace-nowrap disabled:opacity-50 ${
-                tone === 'danger'
-                  ? 'bg-red-600 hover:bg-red-700'
-                  : 'bg-blue-700 hover:bg-blue-800'
-              }`}
-            >
-              {loading ? 'Processing...' : confirmLabel}
+              <X className="w-4 h-4" />
             </button>
           </div>
-        </form>
+          <p className="text-sm text-slate-600 leading-relaxed mb-5">{description}</p>
+          <form onSubmit={handleSubmit}>
+            {requireReason && (
+              <div className="mb-5">
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  {reasonLabel} <span className="text-red-600">*</span>
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder={reasonPlaceholder}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-700"
+                />
+              </div>
+            )}
+            <div className="flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={loading}
+                onClick={onClose}
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors whitespace-nowrap"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loading || (requireReason && !reason.trim())}
+                className={`px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors whitespace-nowrap disabled:opacity-50 ${
+                  tone === 'danger'
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : 'bg-blue-700 hover:bg-blue-800'
+                }`}
+              >
+                {loading ? 'Processing...' : confirmLabel}
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );

@@ -1,10 +1,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  createUserWithEmailAndPassword,
   getRedirectResult,
   onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signInWithRedirect,
   signOut,
+  updateProfile,
   User,
 } from 'firebase/auth';
 import { collection, doc, getDoc, onSnapshot, query, setDoc, where } from 'firebase/firestore';
@@ -19,12 +23,30 @@ import {
 import { ensureSeededDatabase } from '../lib/seedData';
 import { evaluatePaymentReminders, ReminderEvaluationResult } from '../lib/zacmaService';
 import {
+  DEFAULT_CHANNEL_RULES,
+  DEFAULT_SMS_CONFIG,
+  DEFAULT_SMS_TEMPLATES,
+  ensureCommunicationDefaults,
+  syncOwnDirectoryPresence,
+} from '../lib/communicationService';
+import {
+  DEFAULT_SECURITY_CONFIG,
+  recordLoginHistoryEvent,
+} from '../lib/securityService';
+import {
   AttendanceRecord,
   AuditLog,
+  CommunicationPolicy,
+  Conversation,
   Course,
+  DirectoryUser,
   Enrollment,
   Expense,
   ExpenseCategory,
+  FinancialAdjustment,
+  LoginHistoryRecord,
+  NavSection,
+  NotificationChannelRule,
   NotificationPreference,
   Payment,
   PaymentInstallment,
@@ -34,6 +56,10 @@ import {
   RoleCode,
   RoleRecord,
   SchemaMigration,
+  SecurityConfig,
+  SmsLog,
+  SmsSystemConfig,
+  SmsTemplate,
   StaffProfile,
   Student,
   todayIsoDate,
@@ -60,8 +86,23 @@ interface PortalContextValue {
   authLoading: boolean;
   dataLoading: boolean;
   authError: string | null;
-  signInWithGoogle: () => Promise<void>;
-  signOutUser: () => Promise<void>;
+  clearAuthError: () => void;
+  signInWithGoogle: (portalType?: 'STAFF' | 'STUDENT') => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<boolean>;
+  signUpWithEmail: (params: {
+    fullName: string;
+    email: string;
+    password: string;
+    portalType: 'STAFF' | 'STUDENT';
+  }) => Promise<boolean>;
+  sendPasswordReset: (email: string) => Promise<boolean>;
+  signOutUser: (reason?: 'MANUAL' | 'INACTIVITY_TIMEOUT') => Promise<void>;
+
+  sessionWarningOpen: boolean;
+  sessionSecondsRemaining: number;
+  sessionExpiredNotice: string | null;
+  clearSessionExpiredNotice: () => void;
+  continueSession: () => Promise<void>;
 
   roles: RoleRecord[];
   staffProfiles: StaffProfile[];
@@ -74,12 +115,24 @@ interface PortalContextValue {
   receipts: Receipt[];
   expenseCategories: ExpenseCategory[];
   expenses: Expense[];
+  financialAdjustments: FinancialAdjustment[];
   attendance: AttendanceRecord[];
   notifications: PortalNotification[];
   persistedNotifications: PortalNotification[];
   notificationPrefs: NotificationPreference | null;
   schemaMigrations: SchemaMigration[];
   auditLogs: AuditLog[];
+  securityConfig: SecurityConfig;
+  loginHistory: LoginHistoryRecord[];
+
+  smsConfig: SmsSystemConfig;
+  communicationPolicy: CommunicationPolicy;
+  smsTemplates: SmsTemplate[];
+  smsLogs: SmsLog[];
+  channelRules: NotificationChannelRule[];
+  directoryUsers: DirectoryUser[];
+  conversations: Conversation[];
+  unreadMessagesCount: number;
 
   lastReminderRun: ReminderEvaluationResult | null;
   runningReminders: boolean;
@@ -113,14 +166,49 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [financialAdjustments, setFinancialAdjustments] = useState<FinancialAdjustment[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [persistedNotifications, setPersistedNotifications] = useState<PortalNotification[]>([]);
   const [notificationPrefs, setNotificationPrefs] = useState<NotificationPreference | null>(null);
   const [schemaMigrations, setSchemaMigrations] = useState<SchemaMigration[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [securityConfig, setSecurityConfig] = useState<SecurityConfig>(DEFAULT_SECURITY_CONFIG);
+  const [loginHistory, setLoginHistory] = useState<LoginHistoryRecord[]>([]);
+
+  const [sessionWarningOpen, setSessionWarningOpen] = useState(false);
+  const [sessionSecondsRemaining, setSessionSecondsRemaining] = useState(60);
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState<string | null>(null);
+
+  const [smsConfig, setSmsConfig] = useState<SmsSystemConfig>(DEFAULT_SMS_CONFIG);
+  const [communicationPolicy, setCommunicationPolicy] = useState<CommunicationPolicy>({
+    id: 'default',
+    portalNotificationsEnabled: DEFAULT_SMS_CONFIG.portalNotificationsEnabled,
+    internalMessagingEnabled: DEFAULT_SMS_CONFIG.internalMessagingEnabled,
+    allowStudentToInstructor: DEFAULT_SMS_CONFIG.allowStudentToInstructor,
+    allowStudentToAdmin: DEFAULT_SMS_CONFIG.allowStudentToAdmin,
+    allowStudentToStudent: DEFAULT_SMS_CONFIG.allowStudentToStudent,
+    allowAttachments: DEFAULT_SMS_CONFIG.allowAttachments,
+    updatedAt: DEFAULT_SMS_CONFIG.updatedAt,
+  });
+  const [smsTemplates, setSmsTemplates] = useState<SmsTemplate[]>(
+    DEFAULT_SMS_TEMPLATES.map((t) => ({ ...t, updatedAt: DEFAULT_SMS_CONFIG.updatedAt }))
+  );
+  const [smsLogs, setSmsLogs] = useState<SmsLog[]>([]);
+  const [channelRules, setChannelRules] = useState<NotificationChannelRule[]>(
+    DEFAULT_CHANNEL_RULES.map((r) => ({ ...r, updatedAt: DEFAULT_SMS_CONFIG.updatedAt }))
+  );
+  const [directoryUsers, setDirectoryUsers] = useState<DirectoryUser[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+
   const [lastReminderRun, setLastReminderRun] = useState<ReminderEvaluationResult | null>(null);
   const [runningReminders, setRunningReminders] = useState(false);
   const autoReminderRanRef = useRef(false);
+  const commDefaultsEnsuredRef = useRef(false);
+  const sessionEstablishedUidRef = useRef<string | null>(null);
+  const activeSessionIdRef = useRef<string | undefined>(undefined);
+  const lastActivityRef = useRef<number>(Date.now());
+  const sessionWarningOpenRef = useRef<boolean>(false);
+  const signingOutRef = useRef<boolean>(false);
 
   const pushToast = (tone: 'success' | 'error' | 'info', message: string) => {
     const id = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -165,7 +253,20 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         const snap = await getDoc(profileRef);
         const now = new Date().toISOString();
         const isBootstrap =
+          firebaseUser.emailVerified &&
           (firebaseUser.email || '').toLowerCase() === BOOTSTRAP_ADMIN_EMAIL;
+
+        // Read optional first-time sign-up intent (INSTRUCTOR or STUDENT only; enforced by Firestore rules)
+        let pendingIntent: { fullName?: string; role?: 'INSTRUCTOR' | 'STUDENT' } | null = null;
+        try {
+          const rawIntent = window.sessionStorage.getItem('zacma_pending_auth_intent');
+          if (rawIntent) {
+            pendingIntent = JSON.parse(rawIntent);
+            window.sessionStorage.removeItem('zacma_pending_auth_intent');
+          }
+        } catch {
+          pendingIntent = null;
+        }
 
         let resolved: StaffProfile;
         if (snap.exists()) {
@@ -174,20 +275,40 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             id: snap.id,
             uid: d.uid || firebaseUser.uid,
             email: d.email || firebaseUser.email || '',
-            fullName: d.fullName || firebaseUser.displayName || 'ZACMA Staff',
+            fullName: d.fullName || firebaseUser.displayName || 'ZACMA User',
             phone: d.phone,
             role: isBootstrap ? 'ADMIN' : (d.role as RoleCode),
             linkedStudentId: d.linkedStudentId,
+            allowedModules: Array.isArray(d.allowedModules)
+              ? (d.allowedModules as NavSection[])
+              : undefined,
+            canExportReports: typeof d.canExportReports === 'boolean' ? d.canExportReports : undefined,
+            lastLoginAt: d.lastLoginAt,
             isActive: d.isActive ?? true,
             createdAt: d.createdAt || now,
             updatedAt: d.updatedAt || now,
           };
         } else {
-          const initialRole: RoleCode = isBootstrap ? 'ADMIN' : 'INSTRUCTOR';
+          const allowedSelfRoles: Array<'INSTRUCTOR' | 'STUDENT'> = [
+            'INSTRUCTOR',
+            'STUDENT',
+          ];
+          const requestedSelfRole =
+            pendingIntent?.role && allowedSelfRoles.includes(pendingIntent.role)
+              ? pendingIntent.role
+              : 'INSTRUCTOR';
+          const initialRole: RoleCode = isBootstrap ? 'ADMIN' : requestedSelfRole;
+          const resolvedName = (
+            pendingIntent?.fullName?.trim() ||
+            firebaseUser.displayName ||
+            firebaseUser.email?.split('@')[0] ||
+            (initialRole === 'STUDENT' ? 'ZACMA Student' : 'ZACMA Staff')
+          ).slice(0, 120);
+
           const newProfile = {
             uid: firebaseUser.uid,
             email: firebaseUser.email || '',
-            fullName: (firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'ZACMA Staff').slice(0, 120),
+            fullName: resolvedName,
             role: initialRole,
             isActive: true,
             createdAt: now,
@@ -202,7 +323,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
           await ensureSeededDatabase(resolved.uid, resolved.fullName);
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Unable to load staff profile.';
+        const msg = err instanceof Error ? err.message : 'Unable to load portal profile.';
         setAuthError(msg);
       } finally {
         setAuthLoading(false);
@@ -267,6 +388,164 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     );
     unsubs.push(prefUnsub);
 
+    // Communication policy (PII-free flags readable by all signed-in users)
+    const policyUnsub = onSnapshot(
+      doc(db, 'communication_policy', 'default'),
+      (snap) => {
+        if (snap.exists()) {
+          setCommunicationPolicy({ id: snap.id, ...snap.data() } as CommunicationPolicy);
+        }
+      },
+      () => {
+        // Non-fatal fallback to defaults
+      }
+    );
+    unsubs.push(policyUnsub);
+
+    // Security & session timeout configuration (readable by all signed-in users)
+    const secCfgUnsub = onSnapshot(
+      doc(db, 'security_config', 'default'),
+      (snap) => {
+        if (snap.exists()) {
+          setSecurityConfig({ id: snap.id, ...snap.data() } as SecurityConfig);
+        } else {
+          setSecurityConfig(DEFAULT_SECURITY_CONFIG);
+        }
+      },
+      () => {
+        setSecurityConfig(DEFAULT_SECURITY_CONFIG);
+      }
+    );
+    unsubs.push(secCfgUnsub);
+
+    // Login history (Admin reads all; non-admin reads strictly own)
+    const loginHistQuery =
+      actualRole === 'ADMIN'
+        ? collection(db, 'login_history')
+        : query(collection(db, 'login_history'), where('userId', '==', user.uid));
+    const loginHistUnsub = onSnapshot(
+      loginHistQuery,
+      (snapshot) => {
+        const rows = snapshot.docs.map(
+          (d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }) as LoginHistoryRecord
+        );
+        rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setLoginHistory(rows);
+      },
+      () => {
+        // Non-fatal
+      }
+    );
+    unsubs.push(loginHistUnsub);
+
+    // PII-free Messaging Directory (Admin reads all; non-admin reads active only per rules)
+    const dirQuery =
+      actualRole === 'ADMIN'
+        ? collection(db, 'directory_users')
+        : query(collection(db, 'directory_users'), where('isActive', '==', true));
+    const dirUnsub = onSnapshot(
+      dirQuery,
+      (snapshot) => {
+        const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as DirectoryUser);
+        rows.sort((a, b) => a.fullName.localeCompare(b.fullName));
+        setDirectoryUsers(rows);
+      },
+      () => {
+        // Non-fatal if collection not yet seeded
+      }
+    );
+    unsubs.push(dirUnsub);
+
+    // Real-time Internal Conversations (Strictly matching Firestore security rules)
+    if (actualRole === 'ADMIN') {
+      subscribe<Conversation>('conversations', setConversations, (a, b) =>
+        (b.lastMessageAt || b.updatedAt).localeCompare(a.lastMessageAt || a.updatedAt)
+      );
+    } else {
+      const convBuckets = new Map<string, Map<string, Conversation>>();
+      const emitMergedConversations = () => {
+        const merged = new Map<string, Conversation>();
+        convBuckets.forEach((bucket) => {
+          bucket.forEach((conv, id) => merged.set(id, conv));
+        });
+        const list = Array.from(merged.values());
+        list.sort((a, b) =>
+          (b.lastMessageAt || b.updatedAt).localeCompare(a.lastMessageAt || a.updatedAt)
+        );
+        setConversations(list);
+      };
+
+      const addConvQuery = (key: string, q: ReturnType<typeof query>) => {
+        const unsub = onSnapshot(
+          q,
+          (snapshot) => {
+            const bucket = new Map<string, Conversation>();
+            snapshot.docs.forEach((d) => {
+              bucket.set(d.id, { id: d.id, ...(d.data() as Record<string, unknown>) } as Conversation);
+            });
+            convBuckets.set(key, bucket);
+            emitMergedConversations();
+          },
+          () => {
+            // Non-fatal fallback
+          }
+        );
+        unsubs.push(unsub);
+      };
+
+      addConvQuery(
+        'direct_and_group',
+        query(collection(db, 'conversations'), where('participantIds', 'array-contains', user.uid))
+      );
+      addConvQuery(
+        'bcast_all',
+        query(
+          collection(db, 'conversations'),
+          where('type', '==', 'BROADCAST'),
+          where('broadcastAudience', '==', 'ALL_USERS')
+        )
+      );
+      if (actualRole === 'STUDENT') {
+        addConvQuery(
+          'bcast_students',
+          query(
+            collection(db, 'conversations'),
+            where('type', '==', 'BROADCAST'),
+            where('broadcastAudience', '==', 'ALL_STUDENTS')
+          )
+        );
+      } else {
+        addConvQuery(
+          'bcast_staff',
+          query(
+            collection(db, 'conversations'),
+            where('type', '==', 'BROADCAST'),
+            where('broadcastAudience', '==', 'ALL_STAFF')
+          )
+        );
+        if (actualRole === 'INSTRUCTOR') {
+          addConvQuery(
+            'bcast_instructors',
+            query(
+              collection(db, 'conversations'),
+              where('type', '==', 'BROADCAST'),
+              where('broadcastAudience', '==', 'ALL_INSTRUCTORS')
+            )
+          );
+        }
+        if (actualRole === 'ACCOUNTANT') {
+          addConvQuery(
+            'bcast_accountants',
+            query(
+              collection(db, 'conversations'),
+              where('type', '==', 'BROADCAST'),
+              where('broadcastAudience', '==', 'ALL_ACCOUNTANTS')
+            )
+          );
+        }
+      }
+    }
+
     // STRICT ISOLATED STUDENT ROLE SUBSCRIPTIONS (Only their own studentId records)
     if (actualRole === 'STUDENT') {
       const linkedId = profile.linkedStudentId;
@@ -279,6 +558,45 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       setStaffProfiles([profile]);
       setAuditLogs([]);
       setSchemaMigrations([]);
+      setSmsLogs([]);
+
+      // Merge student's notifications across studentId, recipientUid, and targetRole == 'ALL'
+      const stuNotifBuckets = new Map<string, Map<string, PortalNotification>>();
+      const emitStudentNotifications = () => {
+        const merged = new Map<string, PortalNotification>();
+        stuNotifBuckets.forEach((b) => {
+          b.forEach((n, id) => merged.set(id, n));
+        });
+        const list = Array.from(merged.values());
+        list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setPersistedNotifications(list);
+      };
+      const addStudentNotifQuery = (key: string, q: ReturnType<typeof query>) => {
+        const unsub = onSnapshot(
+          q,
+          (snapshot) => {
+            const b = new Map<string, PortalNotification>();
+            snapshot.docs.forEach((d) => {
+              b.set(d.id, { id: d.id, ...(d.data() as Record<string, unknown>) } as PortalNotification);
+            });
+            stuNotifBuckets.set(key, b);
+            emitStudentNotifications();
+          },
+          () => {
+            // Non-fatal fallback
+          }
+        );
+        unsubs.push(unsub);
+      };
+
+      addStudentNotifQuery(
+        'by_uid',
+        query(collection(db, 'notifications'), where('recipientUid', '==', user.uid))
+      );
+      addStudentNotifQuery(
+        'by_all',
+        query(collection(db, 'notifications'), where('targetRole', '==', 'ALL'))
+      );
 
       if (linkedId) {
         const stuUnsub = onSnapshot(
@@ -320,8 +638,15 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         subscribeOwn<Receipt>('receipts', setReceipts, (a, b) =>
           b.issuedAt.localeCompare(a.issuedAt)
         );
-        subscribeOwn<PortalNotification>('notifications', setPersistedNotifications, (a, b) =>
+        subscribeOwn<AttendanceRecord>('attendance', setAttendance, (a, b) =>
+          b.attendanceDate.localeCompare(a.attendanceDate)
+        );
+        subscribeOwn<FinancialAdjustment>('financial_adjustments', setFinancialAdjustments, (a, b) =>
           b.createdAt.localeCompare(a.createdAt)
+        );
+        addStudentNotifQuery(
+          'by_student',
+          query(collection(db, 'notifications'), where('studentId', '==', linkedId))
         );
       } else {
         setStudents([]);
@@ -329,7 +654,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         setInstallments([]);
         setPayments([]);
         setReceipts([]);
-        setPersistedNotifications([]);
+        setAttendance([]);
+        setFinancialAdjustments([]);
       }
 
       const timer = window.setTimeout(() => setDataLoading(false), 350);
@@ -354,6 +680,20 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     subscribe<PortalNotification>('notifications', setPersistedNotifications, (a, b) =>
       b.createdAt.localeCompare(a.createdAt)
     );
+    const rulesUnsub = onSnapshot(
+      collection(db, 'notification_channel_rules'),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as NotificationChannelRule);
+          rows.sort((a, b) => a.label.localeCompare(b.label));
+          setChannelRules(rows);
+        }
+      },
+      () => {
+        // Keep defaults
+      }
+    );
+    unsubs.push(rulesUnsub);
 
     // Finance-restricted collections (Strictly excluded for Instructors and General Staff)
     if (actualRole === 'ADMIN' || actualRole === 'ACCOUNTANT') {
@@ -375,6 +715,42 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       subscribe<Expense>('expenses', setExpenses, (a, b) =>
         b.expenseDate.localeCompare(a.expenseDate)
       );
+      subscribe<FinancialAdjustment>('financial_adjustments', setFinancialAdjustments, (a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
+
+      // SMS configuration, templates, and logs (Finance staff read; Admin manages)
+      const smsCfgUnsub = onSnapshot(
+        doc(db, 'sms_config', 'default'),
+        (snap) => {
+          if (snap.exists()) {
+            setSmsConfig({ id: snap.id, ...snap.data() } as SmsSystemConfig);
+          }
+        },
+        () => {
+          // Keep defaults
+        }
+      );
+      unsubs.push(smsCfgUnsub);
+
+      const smsTplUnsub = onSnapshot(
+        collection(db, 'sms_templates'),
+        (snapshot) => {
+          if (!snapshot.empty) {
+            const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as SmsTemplate);
+            rows.sort((a, b) => a.name.localeCompare(b.name));
+            setSmsTemplates(rows);
+          }
+        },
+        () => {
+          // Keep defaults
+        }
+      );
+      unsubs.push(smsTplUnsub);
+
+      subscribe<SmsLog>('sms_logs', setSmsLogs, (a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
     } else {
       setPaymentPlans([]);
       setInstallments([]);
@@ -382,6 +758,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       setReceipts([]);
       setExpenseCategories([]);
       setExpenses([]);
+      setFinancialAdjustments([]);
+      setSmsLogs([]);
     }
 
     // Admin-only collections (Staff directory PII + Immutable Audit Trail + Schema Migrations)
@@ -408,6 +786,44 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       unsubs.forEach((u) => u());
     };
   }, [user, profile, actualRole]);
+
+  // Sync own PII-free presence into directory_users on login and every 3 minutes
+  useEffect(() => {
+    if (!user || !profile) return;
+    const linkedStudent = profile.linkedStudentId
+      ? students.find((s) => s.id === profile.linkedStudentId)
+      : undefined;
+    void syncOwnDirectoryPresence(profile, linkedStudent);
+    const interval = window.setInterval(() => {
+      void syncOwnDirectoryPresence(profile, linkedStudent);
+    }, 180_000);
+    return () => window.clearInterval(interval);
+  }, [user, profile, students]);
+
+  // Idempotently initialize SMS defaults, templates, channel rules & staff directory once per Admin session
+  useEffect(() => {
+    if (
+      !dataLoading &&
+      !commDefaultsEnsuredRef.current &&
+      profile &&
+      actualRole === 'ADMIN' &&
+      staffProfiles.length > 0
+    ) {
+      commDefaultsEnsuredRef.current = true;
+      void ensureCommunicationDefaults(
+        { uid: profile.uid, fullName: profile.fullName, role: actualRole },
+        staffProfiles,
+        students
+      );
+    }
+  }, [dataLoading, profile, actualRole, staffProfiles, students]);
+
+  const unreadMessagesCount = useMemo(() => {
+    if (!user) return 0;
+    return conversations.filter(
+      (c) => Boolean(c.lastMessageAt) && !c.readByUids.includes(user.uid)
+    ).length;
+  }, [conversations, user]);
 
   // Default preview student when Admin switches to STUDENT preview
   useEffect(() => {
@@ -554,15 +970,19 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     }
 
     const filteredPersisted = persistedNotifications.filter((n) => {
+      if (n.recipientUid) {
+        return user ? n.recipientUid === user.uid : false;
+      }
       if (effectiveRole === 'INSTRUCTOR' || effectiveRole === 'GENERAL_STAFF') {
-        return n.targetRole === effectiveRole;
+        return n.targetRole === effectiveRole || n.targetRole === 'ALL';
       }
       if (effectiveRole === 'STUDENT') {
         const activeStuId =
           actualRole === 'ADMIN' && previewRole === 'STUDENT'
             ? previewStudentId
             : profile?.linkedStudentId;
-        return n.targetRole === 'STUDENT' && (!activeStuId || n.studentId === activeStuId);
+        if (n.targetRole === 'ALL') return true;
+        return n.targetRole === 'STUDENT' && (!activeStuId || !n.studentId || n.studentId === activeStuId);
       }
       return n.targetRole === 'ALL' || n.targetRole === effectiveRole;
     });
@@ -574,14 +994,58 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     previewRole,
     previewStudentId,
     profile?.linkedStudentId,
+    user,
     students,
     payments,
     installments,
     persistedNotifications,
   ]);
 
-  const signInWithGoogle = async () => {
+  const clearAuthError = useCallback(() => {
     setAuthError(null);
+  }, []);
+
+  const formatEmailAuthError = (err: unknown): string => {
+    const code = (err as { code?: string })?.code || '';
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    if (code === 'auth/operation-not-allowed') {
+      return `EMAIL_PASSWORD_DISABLED|${activeFirebaseProjectId}`;
+    }
+    if (
+      code === 'auth/invalid-credential' ||
+      code === 'auth/wrong-password' ||
+      code === 'auth/user-not-found'
+    ) {
+      return 'Invalid email address or password. Please verify your credentials or click "Forgot password?".';
+    }
+    if (code === 'auth/email-already-in-use') {
+      return 'An account with this email address already exists. Switch to "Sign In" or use Google Sign-In.';
+    }
+    if (code === 'auth/weak-password') {
+      return 'Password is too weak. Please choose at least 6 characters.';
+    }
+    if (code === 'auth/invalid-email') {
+      return 'Please enter a valid email address.';
+    }
+    if (code === 'auth/too-many-requests') {
+      return 'Too many failed sign-in attempts. Please wait a few minutes or reset your password.';
+    }
+    if (code === 'auth/network-request-failed') {
+      return 'Network error while reaching Firebase Authentication. Please check your connection and retry.';
+    }
+    return rawMsg || 'Authentication failed. Please try again.';
+  };
+
+  const signInWithGoogle = async (portalType: 'STAFF' | 'STUDENT' = 'STAFF') => {
+    setAuthError(null);
+    try {
+      window.sessionStorage.setItem(
+        'zacma_pending_auth_intent',
+        JSON.stringify({ role: portalType === 'STUDENT' ? 'STUDENT' : 'INSTRUCTOR' })
+      );
+    } catch {
+      // Ignore storage error
+    }
     try {
       await signInWithPopup(auth, googleAuthProvider);
     } catch (err) {
@@ -620,12 +1084,391 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const signOutUser = async () => {
-    await signOut(auth);
-    setPreviewRole(null);
-    setPreviewStudentId(null);
-    autoReminderRanRef.current = false;
+  const clearSessionExpiredNotice = useCallback(() => {
+    setSessionExpiredNotice(null);
+  }, []);
+
+  const signInWithEmail = async (email: string, password: string): Promise<boolean> => {
+    setAuthError(null);
+    setSessionExpiredNotice(null);
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!trimmedEmail || !password) {
+      setAuthError('Please enter both your email address and password.');
+      return false;
+    }
+
+    // Check server-side failed-login lockout before authenticating
+    try {
+      const checkRes = await fetch('/api/session/login-attempt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          email: trimmedEmail,
+          action: 'check',
+          maxFailedLogins: securityConfig.maxFailedLogins,
+          lockoutMinutes: securityConfig.lockoutMinutes,
+        }),
+      });
+      if (checkRes.status === 429) {
+        const lockData = (await checkRes.json().catch(() => ({}))) as { error?: string };
+        const lockMsg =
+          lockData.error ||
+          'Account temporarily locked after repeated failed sign-in attempts. Please wait and try again.';
+        setAuthError(lockMsg);
+        pushToast('error', lockMsg);
+        return false;
+      }
+    } catch {
+      // Proceed if session endpoint is unreachable
+    }
+
+    try {
+      await signInWithEmailAndPassword(auth, trimmedEmail, password);
+      void fetch('/api/session/login-attempt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email: trimmedEmail, action: 'success' }),
+      }).catch(() => undefined);
+      return true;
+    } catch (err) {
+      const code = (err as { code?: string })?.code || '';
+      let msg = formatEmailAuthError(err);
+
+      if (
+        code === 'auth/invalid-credential' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/user-not-found'
+      ) {
+        try {
+          const failRes = await fetch('/api/session/login-attempt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              email: trimmedEmail,
+              action: 'fail',
+              maxFailedLogins: securityConfig.maxFailedLogins,
+              lockoutMinutes: securityConfig.lockoutMinutes,
+            }),
+          });
+          const failData = (await failRes.json().catch(() => ({}))) as {
+            locked?: boolean;
+            remainingAttempts?: number;
+            error?: string;
+          };
+          if (failData.locked && failData.error) {
+            msg = failData.error;
+          } else if (typeof failData.remainingAttempts === 'number' && failData.remainingAttempts <= 2) {
+            msg = `${msg} (${failData.remainingAttempts} attempt${
+              failData.remainingAttempts === 1 ? '' : 's'
+            } remaining before temporary lockout.)`;
+          }
+        } catch {
+          // Ignore network error on lockout telemetry
+        }
+      }
+
+      setAuthError(msg);
+      if (!msg.startsWith('EMAIL_PASSWORD_DISABLED|')) {
+        pushToast('error', msg);
+      }
+      return false;
+    }
   };
+
+  const signUpWithEmail = async (params: {
+    fullName: string;
+    email: string;
+    password: string;
+    portalType: 'STAFF' | 'STUDENT';
+  }): Promise<boolean> => {
+    setAuthError(null);
+    const trimmedName = params.fullName.trim();
+    const trimmedEmail = params.email.trim();
+    if (trimmedName.length < 2) {
+      setAuthError('Please enter your full name (at least 2 characters).');
+      return false;
+    }
+    if (!trimmedEmail) {
+      setAuthError('Please enter a valid email address.');
+      return false;
+    }
+    if (params.password.length < 6) {
+      setAuthError('Password must be at least 6 characters long.');
+      return false;
+    }
+
+    const desiredRole: 'INSTRUCTOR' | 'STUDENT' =
+      params.portalType === 'STUDENT' ? 'STUDENT' : 'INSTRUCTOR';
+
+    try {
+      window.sessionStorage.setItem(
+        'zacma_pending_auth_intent',
+        JSON.stringify({ fullName: trimmedName.slice(0, 120), role: desiredRole })
+      );
+    } catch {
+      // Ignore storage error
+    }
+
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, trimmedEmail, params.password);
+      await updateProfile(cred.user, { displayName: trimmedName.slice(0, 120) }).catch(() => undefined);
+      pushToast(
+        'success',
+        params.portalType === 'STUDENT'
+          ? 'Student account created. Welcome to the ZACMA Student Portal.'
+          : 'Instructor account created. Welcome to the ZACMA Portal.'
+      );
+      return true;
+    } catch (err) {
+      try {
+        window.sessionStorage.removeItem('zacma_pending_auth_intent');
+      } catch {
+        // Ignore
+      }
+      const msg = formatEmailAuthError(err);
+      setAuthError(msg);
+      if (!msg.startsWith('EMAIL_PASSWORD_DISABLED|')) {
+        pushToast('error', msg);
+      }
+      return false;
+    }
+  };
+
+  const sendPasswordReset = async (email: string): Promise<boolean> => {
+    setAuthError(null);
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setAuthError('Enter your registered email address first to receive a password reset link.');
+      return false;
+    }
+    try {
+      await sendPasswordResetEmail(auth, trimmedEmail);
+      pushToast('success', `Password reset link sent to ${trimmedEmail}. Check your inbox.`);
+      return true;
+    } catch (err) {
+      const msg = formatEmailAuthError(err);
+      setAuthError(msg);
+      return false;
+    }
+  };
+
+  const signOutUser = useCallback(
+    async (reason: 'MANUAL' | 'INACTIVITY_TIMEOUT' = 'MANUAL') => {
+      if (signingOutRef.current) return;
+      signingOutRef.current = true;
+      try {
+        const currentProfile = profile;
+        const currentSessionId = activeSessionIdRef.current;
+
+        if (currentProfile) {
+          await recordLoginHistoryEvent({
+            userId: currentProfile.uid,
+            email: currentProfile.email,
+            fullName: currentProfile.fullName,
+            role: currentProfile.role,
+            eventType: reason === 'INACTIVITY_TIMEOUT' ? 'SESSION_EXPIRED' : 'LOGOUT',
+            authMethod: 'SYSTEM',
+            sessionId: currentSessionId,
+            detail:
+              reason === 'INACTIVITY_TIMEOUT'
+                ? 'Session automatically terminated due to inactivity timeout policy.'
+                : 'User signed out and server session token was invalidated.',
+          });
+        }
+
+        await fetch('/api/session/logout', {
+          method: 'POST',
+          credentials: 'include',
+        }).catch(() => undefined);
+
+        await signOut(auth);
+        setSessionWarningOpen(false);
+        sessionWarningOpenRef.current = false;
+        setPreviewRole(null);
+        setPreviewStudentId(null);
+        autoReminderRanRef.current = false;
+        commDefaultsEnsuredRef.current = false;
+        sessionEstablishedUidRef.current = null;
+        activeSessionIdRef.current = undefined;
+
+        if (reason === 'INACTIVITY_TIMEOUT') {
+          setSessionExpiredNotice(
+            'You were automatically signed out due to inactivity to protect institutional financial records. Please sign in again.'
+          );
+        }
+
+        // Prevent browser back-button navigation into stale protected state
+        try {
+          window.sessionStorage.removeItem('zacma_pending_auth_intent');
+          window.history.replaceState({ zacmaLoggedOut: true }, '', window.location.pathname);
+        } catch {
+          // Ignore history restriction
+        }
+      } finally {
+        signingOutRef.current = false;
+      }
+    },
+    [profile]
+  );
+
+  // Establish signed HttpOnly server session cookie + record login audit event on verified sign-in
+  useEffect(() => {
+    if (!user || !profile || !actualRole) return;
+    if (sessionEstablishedUidRef.current === user.uid) return;
+    sessionEstablishedUidRef.current = user.uid;
+    lastActivityRef.current = Date.now();
+    setSessionExpiredNotice(null);
+
+    const timeoutMinutes =
+      actualRole === 'ADMIN' || actualRole === 'ACCOUNTANT'
+        ? securityConfig.adminTimeoutMinutes
+        : securityConfig.userTimeoutMinutes;
+
+    const providerId = user.providerData?.[0]?.providerId || '';
+    const authMethod: 'GOOGLE' | 'EMAIL_PASSWORD' =
+      providerId === 'google.com' ? 'GOOGLE' : 'EMAIL_PASSWORD';
+
+    void (async () => {
+      let sid: string | undefined;
+      try {
+        const res = await fetch('/api/session/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            uid: profile.uid,
+            email: profile.email,
+            role: actualRole,
+            timeoutMinutes,
+          }),
+        });
+        if (res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { sessionId?: string };
+          sid = data.sessionId;
+          activeSessionIdRef.current = sid;
+        }
+      } catch {
+        // Non-fatal fallback
+      }
+
+      const now = new Date().toISOString();
+      void setDoc(
+        doc(db, 'profiles', profile.uid),
+        { lastLoginAt: now, updatedAt: now },
+        { merge: true }
+      ).catch(() => undefined);
+
+      await recordLoginHistoryEvent({
+        userId: profile.uid,
+        email: profile.email,
+        fullName: profile.fullName,
+        role: actualRole,
+        eventType: 'LOGIN',
+        authMethod,
+        sessionId: sid,
+        detail: `Signed in via ${authMethod === 'GOOGLE' ? 'Google OAuth' : 'Email & Password'} (Inactivity timeout: ${timeoutMinutes} min).`,
+      });
+    })();
+  }, [user, profile, actualRole, securityConfig.adminTimeoutMinutes, securityConfig.userTimeoutMinutes]);
+
+  const continueSession = useCallback(async () => {
+    lastActivityRef.current = Date.now();
+    sessionWarningOpenRef.current = false;
+    setSessionWarningOpen(false);
+    const timeoutMinutes =
+      actualRole === 'ADMIN' || actualRole === 'ACCOUNTANT'
+        ? securityConfig.adminTimeoutMinutes
+        : securityConfig.userTimeoutMinutes;
+    try {
+      const res = await fetch('/api/session/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ timeoutMinutes }),
+      });
+      if (res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { sessionId?: string };
+        if (data.sessionId) activeSessionIdRef.current = data.sessionId;
+      }
+    } catch {
+      // Non-fatal
+    }
+    pushToast('info', 'Session extended securely.');
+  }, [actualRole, securityConfig.adminTimeoutMinutes, securityConfig.userTimeoutMinutes]);
+
+  // Role-based Inactivity Monitoring & Automatic Logout
+  useEffect(() => {
+    if (!user || !profile || !actualRole) {
+      setSessionWarningOpen(false);
+      sessionWarningOpenRef.current = false;
+      return;
+    }
+
+    const timeoutMinutes =
+      actualRole === 'ADMIN' || actualRole === 'ACCOUNTANT'
+        ? securityConfig.adminTimeoutMinutes
+        : securityConfig.userTimeoutMinutes;
+    const totalTimeoutMs = Math.max(60_000, timeoutMinutes * 60 * 1000);
+    const warningMs = Math.min(
+      Math.max(15_000, securityConfig.warningBeforeSeconds * 1000),
+      Math.floor(totalTimeoutMs / 2)
+    );
+
+    lastActivityRef.current = Date.now();
+    let lastThrottle = 0;
+
+    const recordActivity = () => {
+      if (sessionWarningOpenRef.current) return; // Require explicit click on Continue Session once warning opens
+      const now = Date.now();
+      if (now - lastThrottle < 2000) return;
+      lastThrottle = now;
+      lastActivityRef.current = now;
+    };
+
+    const events: Array<keyof WindowEventMap> = [
+      'mousedown',
+      'keydown',
+      'touchstart',
+      'scroll',
+      'pointerdown',
+    ];
+    events.forEach((evt) => window.addEventListener(evt, recordActivity, { passive: true }));
+
+    const ticker = window.setInterval(() => {
+      const elapsed = Date.now() - lastActivityRef.current;
+      const remainingMs = totalTimeoutMs - elapsed;
+
+      if (remainingMs <= 0) {
+        window.clearInterval(ticker);
+        void signOutUser('INACTIVITY_TIMEOUT');
+        return;
+      }
+
+      if (remainingMs <= warningMs) {
+        if (!sessionWarningOpenRef.current) {
+          sessionWarningOpenRef.current = true;
+          setSessionWarningOpen(true);
+        }
+        setSessionSecondsRemaining(Math.max(1, Math.ceil(remainingMs / 1000)));
+      }
+    }, 1000);
+
+    return () => {
+      events.forEach((evt) => window.removeEventListener(evt, recordActivity));
+      window.clearInterval(ticker);
+    };
+  }, [
+    user,
+    profile,
+    actualRole,
+    securityConfig.adminTimeoutMinutes,
+    securityConfig.userTimeoutMinutes,
+    securityConfig.warningBeforeSeconds,
+    signOutUser,
+  ]);
 
   return (
     <PortalContext.Provider
@@ -641,8 +1484,17 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         authLoading,
         dataLoading,
         authError,
+        clearAuthError,
         signInWithGoogle,
+        signInWithEmail,
+        signUpWithEmail,
+        sendPasswordReset,
         signOutUser,
+        sessionWarningOpen,
+        sessionSecondsRemaining,
+        sessionExpiredNotice,
+        clearSessionExpiredNotice,
+        continueSession,
         roles,
         staffProfiles,
         courses,
@@ -654,12 +1506,23 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         receipts,
         expenseCategories,
         expenses,
+        financialAdjustments,
         attendance,
         notifications,
         persistedNotifications,
         notificationPrefs,
         schemaMigrations,
         auditLogs,
+        securityConfig,
+        loginHistory,
+        smsConfig,
+        communicationPolicy,
+        smsTemplates,
+        smsLogs,
+        channelRules,
+        directoryUsers,
+        conversations,
+        unreadMessagesCount,
         lastReminderRun,
         runningReminders,
         runReminderEvaluationNow,

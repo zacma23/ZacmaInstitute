@@ -13,12 +13,15 @@ import {
   ClipboardCheck,
   CreditCard,
   Database,
+  FileSpreadsheet,
   FileText,
   History,
   LayoutDashboard,
   LogOut,
   Menu,
+  MessageSquare,
   ShieldCheck,
+  Smartphone,
   UserCog,
   Users,
   X,
@@ -27,9 +30,11 @@ import { PortalProvider, usePortal } from './context/PortalContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginScreen } from './components/LoginScreen';
 import { ReceiptModal } from './components/ReceiptModal';
+import { SessionTimeoutModal } from './components/SessionTimeoutModal';
 import { ToastContainer } from './components/PortalUI';
 import { StaffQuickSearch } from './components/StaffQuickSearch';
 import { ZacmaAiAssistant } from './components/ZacmaAiAssistant';
+import { ZacmaLogo } from './components/ZacmaLogo';
 import { DashboardView } from './modules/DashboardView';
 import { StudentsView } from './modules/StudentsView';
 import { CoursesView } from './modules/CoursesView';
@@ -39,13 +44,24 @@ import {
   ReceiptsArchiveView,
 } from './modules/PaymentsAndApprovalsView';
 import { AccountingView } from './modules/AccountingView';
+import { FinancialReportsView } from './modules/FinancialReportsView';
 import { AttendanceView } from './modules/AttendanceView';
 import { AuditLogsView, StaffRolesView } from './modules/StaffAndAuditView';
 import { RemindersAndPreferencesView } from './modules/RemindersAndPreferencesView';
 import { SetupWizardView } from './modules/SetupWizardView';
 import { StudentPortalView } from './modules/StudentPortalView';
+import { MessagingView } from './modules/MessagingView';
+import { CommunicationsAdminView } from './modules/CommunicationsAdminView';
 import { markNotificationRead } from './lib/zacmaService';
-import { formatDateShort, NavSection, Receipt, RoleCode, todayIsoDate } from './types/zacma';
+import { markAllNotificationsRead } from './lib/communicationService';
+import { formatAddisDateTimeDual } from './lib/ethiopianCalendar';
+import {
+  NavSection,
+  Receipt,
+  RoleCode,
+  StudentPaymentCategory,
+  todayIsoDate,
+} from './types/zacma';
 
 interface NavItem {
   id: NavSection;
@@ -69,14 +85,24 @@ function PortalShell() {
     installments,
     payments,
     notifications,
+    unreadMessagesCount,
+    pushToast,
     toasts,
     dismissToast,
   } = usePortal();
 
   const [activeTab, setActiveTab] = useState<NavSection>('dashboard');
+  const [reportStatusFilter, setReportStatusFilter] = useState<'ALL' | StudentPaymentCategory>('ALL');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [notifFilter, setNotifFilter] = useState<'ALL' | 'FINANCE' | 'MESSAGES' | 'ANNOUNCEMENTS'>('ALL');
+  const [markingAllNotifs, setMarkingAllNotifs] = useState(false);
   const [activeReceipt, setActiveReceipt] = useState<Receipt | null>(null);
+
+  const openReportsWithFilter = (status?: 'ALL' | StudentPaymentCategory) => {
+    setReportStatusFilter(status || 'ALL');
+    setActiveTab('reports');
+  };
 
   const pendingApprovalsCount = useMemo(() => {
     const pStu = students.filter((s) => s.registrationStatus === 'PENDING').length;
@@ -139,15 +165,37 @@ function PortalShell() {
       },
       {
         id: 'accounting',
-        label: 'Accounting & Reports',
+        label: 'Accounting & Ledger',
         icon: <BarChart3 className="w-4 h-4" />,
         roles: ['ADMIN', 'ACCOUNTANT'],
+      },
+      {
+        id: 'reports',
+        label: 'Excel Reports (.xlsx)',
+        icon: <FileSpreadsheet className="w-4 h-4" />,
+        roles:
+          effectiveRole === 'ACCOUNTANT' && profile?.canExportReports
+            ? ['ADMIN', 'ACCOUNTANT']
+            : ['ADMIN'],
       },
       {
         id: 'attendance',
         label: 'Attendance',
         icon: <ClipboardCheck className="w-4 h-4" />,
         roles: ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF'],
+      },
+      {
+        id: 'messages',
+        label: 'Internal Messages',
+        icon: <MessageSquare className="w-4 h-4" />,
+        roles: ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF'],
+        badgeCount: unreadMessagesCount,
+      },
+      {
+        id: 'communications',
+        label: 'SMS & Broadcasts',
+        icon: <Smartphone className="w-4 h-4" />,
+        roles: ['ADMIN', 'ACCOUNTANT'],
       },
       {
         id: 'staff',
@@ -157,7 +205,7 @@ function PortalShell() {
       },
       {
         id: 'audit',
-        label: 'Audit Logs',
+        label: 'Audit & Security',
         icon: <History className="w-4 h-4" />,
         roles: ['ADMIN'],
       },
@@ -169,8 +217,24 @@ function PortalShell() {
       },
     ];
     if (!effectiveRole) return [];
-    return all.filter((item) => item.roles.includes(effectiveRole));
-  }, [effectiveRole, pendingApprovalsCount, overdueInstallmentsCount]);
+    const roleFiltered = all.filter((item) => item.roles.includes(effectiveRole));
+    if (
+      effectiveRole === 'GENERAL_STAFF' &&
+      profile?.allowedModules &&
+      profile.allowedModules.length > 0
+    ) {
+      const allowedSet = new Set<NavSection>(['dashboard', ...profile.allowedModules]);
+      return roleFiltered.filter((item) => allowedSet.has(item.id));
+    }
+    return roleFiltered;
+  }, [
+    effectiveRole,
+    profile?.allowedModules,
+    profile?.canExportReports,
+    pendingApprovalsCount,
+    overdueInstallmentsCount,
+    unreadMessagesCount,
+  ]);
 
   // Redirect to dashboard if effectiveRole switches away from a restricted tab
   useEffect(() => {
@@ -179,14 +243,42 @@ function PortalShell() {
     }
   }, [navItems, activeTab]);
 
+  // Prevent browser back-button / bfcache restoration of protected pages after logout
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted && !user) {
+        window.location.reload();
+      }
+    };
+    const handlePopState = () => {
+      if (!user) {
+        window.history.replaceState(null, '', '/');
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [user]);
+
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-center space-y-3">
-          <div className="w-10 h-10 rounded-lg bg-slate-900 text-white font-display font-extrabold text-sm flex items-center justify-center mx-auto">
-            ZT
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm px-10 py-9 text-center max-w-xs w-full space-y-5">
+          <div className="flex justify-center">
+            <ZacmaLogo variant="mark" size="xl" framed />
           </div>
-          <p className="text-xs font-medium text-slate-500">Loading ZACMA Portal...</p>
+          <div>
+            <p className="font-display font-extrabold text-sm tracking-tight text-slate-900">
+              ZACMA <span className="text-blue-700">TECHNOLOGY</span>
+            </p>
+            <p className="text-xs text-slate-500 mt-1">Loading secure portal workspace...</p>
+          </div>
+          <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-full w-2/5 zacma-brand-stripe rounded-full animate-zacma-loader" />
+          </div>
         </div>
       </div>
     );
@@ -207,6 +299,7 @@ function PortalShell() {
       <>
         <StudentPortalView onOpenReceipt={setActiveReceipt} />
         <ZacmaAiAssistant />
+        <SessionTimeoutModal />
         <ReceiptModal receipt={activeReceipt} onClose={() => setActiveReceipt(null)} />
         <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       </>
@@ -217,24 +310,16 @@ function PortalShell() {
   const currentNav = navItems.find((n) => n.id === activeTab);
 
   const SidebarContent = (
-    <div className="h-full flex flex-col bg-slate-900 text-slate-200 select-none">
+    <div className="h-full flex flex-col bg-slate-900 text-slate-200 select-none border-r border-slate-800/80">
+      {/* Subtle Official Royal Blue & Red Brand Top Accent */}
+      <div className="h-1 w-full zacma-brand-stripe shrink-0" />
       {/* Brand Block */}
-      <div className="h-16 px-5 flex items-center justify-between border-b border-slate-800 shrink-0">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded-lg bg-blue-700 text-white font-display font-extrabold text-xs flex items-center justify-center shrink-0">
-            ZT
-          </div>
-          <div className="min-w-0">
-            <p className="font-display font-bold text-xs text-white tracking-tight truncate">
-              ZACMA TECHNOLOGY
-            </p>
-            <p className="text-[10px] text-slate-400 truncate">&amp; Training Institute</p>
-          </div>
-        </div>
+      <div className="h-16 px-4 flex items-center justify-between border-b border-slate-800 shrink-0">
+        <ZacmaLogo variant="lockup" theme="dark" size="sm" framed subtitle="& Training Institute" />
         <button
           type="button"
           onClick={() => setMobileMenuOpen(false)}
-          className="lg:hidden text-slate-400 hover:text-white p-1"
+          className="lg:hidden text-slate-400 hover:text-white p-1.5 rounded-lg"
           aria-label="Close navigation menu"
         >
           <X className="w-5 h-5" />
@@ -253,10 +338,10 @@ function PortalShell() {
                 setActiveTab(item.id);
                 setMobileMenuOpen(false);
               }}
-              className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+              className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${
                 isActive
-                  ? 'bg-blue-700 text-white font-semibold'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  ? 'bg-blue-700 text-white font-semibold shadow-sm'
+                  : 'text-slate-300 hover:bg-white/8 hover:text-white'
               }`}
             >
               <span className="flex items-center gap-2.5 min-w-0">
@@ -338,22 +423,23 @@ function PortalShell() {
       {/* Main Content Area */}
       <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
         {/* Top Bar */}
-        <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-4 sticky top-0 z-20 no-print">
+        <header className="h-16 bg-white/95 backdrop-blur-xs border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-4 sticky top-0 z-20 no-print">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 text-slate-600 hover:text-slate-900 rounded-lg"
+              className="lg:hidden p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg"
               aria-label="Open navigation menu"
             >
               <Menu className="w-5 h-5" />
             </button>
+            <ZacmaLogo variant="mark" size="sm" className="lg:hidden" />
             <div className="flex items-center gap-2 text-xs text-slate-500 min-w-0">
-              <span className="font-semibold text-slate-900 whitespace-nowrap hidden xl:inline">
-                ZACMA Portal
+              <span className="font-display font-bold text-slate-900 whitespace-nowrap hidden xl:inline">
+                ZACMA Technology
               </span>
-              <span className="hidden xl:inline">/</span>
-              <span className="font-semibold text-blue-700 truncate">
+              <span className="hidden xl:inline text-slate-300">/</span>
+              <span className="font-display font-semibold text-blue-700 truncate">
                 {currentNav?.label || 'Dashboard'}
               </span>
             </div>
@@ -433,7 +519,11 @@ function PortalShell() {
         {/* Active Module Viewport */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1440px] w-full mx-auto">
           {activeTab === 'dashboard' && (
-            <DashboardView onNavigate={setActiveTab} onOpenReceipt={setActiveReceipt} />
+            <DashboardView
+              onNavigate={setActiveTab}
+              onOpenReceipt={setActiveReceipt}
+              onOpenReports={openReportsWithFilter}
+            />
           )}
           {activeTab === 'students' && <StudentsView />}
           {activeTab === 'courses' && <CoursesView />}
@@ -441,8 +531,24 @@ function PortalShell() {
           {activeTab === 'reminders' && <RemindersAndPreferencesView />}
           {activeTab === 'approvals' && <ApprovalsQueueView />}
           {activeTab === 'receipts' && <ReceiptsArchiveView onOpenReceipt={setActiveReceipt} />}
-          {activeTab === 'accounting' && <AccountingView />}
+          {activeTab === 'accounting' && (
+            <AccountingView onOpenReports={() => openReportsWithFilter('ALL')} />
+          )}
+          {activeTab === 'reports' && (
+            <FinancialReportsView
+              key={reportStatusFilter}
+              initialStatusFilter={reportStatusFilter}
+            />
+          )}
           {activeTab === 'attendance' && <AttendanceView />}
+          {activeTab === 'messages' && (
+            <MessagingView
+              onOpenAdminBroadcast={
+                effectiveRole === 'ADMIN' ? () => setActiveTab('communications') : undefined
+              }
+            />
+          )}
+          {activeTab === 'communications' && <CommunicationsAdminView />}
           {activeTab === 'staff' && <StaffRolesView />}
           {activeTab === 'audit' && <AuditLogsView />}
           {activeTab === 'setup' && <SetupWizardView />}
@@ -459,47 +565,110 @@ function PortalShell() {
             onClick={() => setNotifOpen(false)}
           />
           <div className="w-full max-w-md bg-white border-l border-slate-200 h-full flex flex-col shadow-2xl">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-2">
               <div>
                 <h2 className="text-sm font-display font-bold text-slate-900">
                   Portal Notifications
                 </h2>
                 <p className="text-xs text-slate-500">
-                  {unreadCount} active alert{unreadCount === 1 ? '' : 's'}
+                  {unreadCount} unread alert{unreadCount === 1 ? '' : 's'}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setNotifOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-700"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                {notifications.some((n) => !n.isRead && !n.id.startsWith('live_')) && (
+                  <button
+                    type="button"
+                    disabled={markingAllNotifs}
+                    onClick={async () => {
+                      setMarkingAllNotifs(true);
+                      try {
+                        const c = await markAllNotificationsRead(notifications);
+                        if (c > 0) pushToast('success', `Marked ${c} notification(s) as read.`);
+                      } finally {
+                        setMarkingAllNotifs(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#172DEB] bg-blue-50 hover:bg-blue-100 rounded-md disabled:opacity-50"
+                  >
+                    <CheckCheck className="w-3.5 h-3.5" />
+                    <span>Mark all read</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setNotifOpen(false)}
+                  className="p-1.5 text-slate-400 hover:text-slate-700"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="px-4 py-2 bg-[#F5F7FC] border-b border-slate-200 flex items-center gap-1.5">
+              {(['ALL', 'FINANCE', 'MESSAGES', 'ANNOUNCEMENTS'] as const).map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setNotifFilter(cat)}
+                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition ${
+                    notifFilter === cat
+                      ? 'bg-[#172DEB] text-white'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {cat === 'ALL'
+                    ? 'All'
+                    : cat.charAt(0) + cat.slice(1).toLowerCase()}
+                </button>
+              ))}
             </div>
             <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-              {notifications.length === 0 ? (
-                <div className="p-10 text-center text-xs text-slate-500">
-                  All caught up — no pending alerts.
-                </div>
-              ) : (
-                notifications.map((n) => {
+              {(() => {
+                const visible = notifications.filter((n) => {
+                  if (notifFilter === 'ALL') return true;
+                  if (notifFilter === 'MESSAGES') {
+                    return n.type === 'NEW_INTERNAL_MESSAGE' || n.type === 'INSTRUCTOR_MESSAGE';
+                  }
+                  if (notifFilter === 'ANNOUNCEMENTS') {
+                    return (
+                      n.type === 'ADMIN_ANNOUNCEMENT' ||
+                      n.type === 'COURSE_ANNOUNCEMENT' ||
+                      n.type === 'SCHEDULE_CHANGE'
+                    );
+                  }
+                  return (
+                    n.type.includes('PAYMENT') ||
+                    n.type.includes('BALANCE') ||
+                    n.type.includes('DEADLINE') ||
+                    n.type.includes('REGISTRATION')
+                  );
+                });
+                if (visible.length === 0) {
+                  return (
+                    <div className="p-10 text-center text-xs text-slate-500">
+                      All caught up — no notifications in this filter.
+                    </div>
+                  );
+                }
+                return visible.map((n) => {
                   const isLive = n.id.startsWith('live_');
                   const toneColor =
-                    n.type === 'OVERDUE_BALANCE' || n.type === 'REJECTED_PAYMENT'
-                      ? 'text-red-700'
+                    n.type === 'OVERDUE_BALANCE' ||
+                    n.type === 'REJECTED_PAYMENT' ||
+                    n.type === 'PAYMENT_OVERDUE'
+                      ? 'text-[#E51B23]'
                       : n.type === 'DEADLINE_APPROACHING'
                       ? 'text-amber-700'
-                      : 'text-blue-700';
+                      : 'text-[#172DEB]';
 
                   return (
                     <div
                       key={n.id}
-                      className={`p-4 space-y-1.5 ${n.isRead ? 'bg-white' : 'bg-slate-50/80'}`}
+                      className={`p-4 space-y-1.5 ${n.isRead ? 'bg-white' : 'bg-[#F5F7FC]/90'}`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <p className={`text-xs font-bold ${toneColor}`}>{n.title}</p>
-                        <span className="text-[11px] text-slate-400 whitespace-nowrap">
-                          {formatDateShort(n.createdAt)}
+                        <span className="text-[10px] text-slate-400 whitespace-nowrap tabular-nums">
+                          {formatAddisDateTimeDual(n.createdAt)}
                         </span>
                       </div>
                       <p className="text-xs text-slate-600 leading-relaxed">{n.message}</p>
@@ -507,7 +676,18 @@ function PortalShell() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (n.type === 'PENDING_PAYMENT' || n.type === 'PENDING_REGISTRATION') {
+                            if (
+                              n.actionSection === 'messages' ||
+                              n.type === 'NEW_INTERNAL_MESSAGE' ||
+                              n.type === 'INSTRUCTOR_MESSAGE'
+                            ) {
+                              setActiveTab('messages');
+                            } else if (
+                              n.type === 'ADMIN_ANNOUNCEMENT' ||
+                              n.type === 'COURSE_ANNOUNCEMENT'
+                            ) {
+                              setActiveTab(effectiveRole === 'ADMIN' ? 'communications' : 'messages');
+                            } else if (n.type === 'PENDING_PAYMENT' || n.type === 'PENDING_REGISTRATION') {
                               setActiveTab(effectiveRole === 'ADMIN' ? 'approvals' : 'students');
                             } else if (n.type === 'REJECTED_PAYMENT' || n.type === 'PAYMENT_REJECTED') {
                               setActiveTab('payments');
@@ -520,11 +700,11 @@ function PortalShell() {
                             ) {
                               setActiveTab('reminders');
                             } else {
-                              setActiveTab('accounting');
+                              setActiveTab('dashboard');
                             }
                             setNotifOpen(false);
                           }}
-                          className="text-[11px] font-semibold text-blue-700 hover:underline"
+                          className="text-[11px] font-semibold text-[#172DEB] hover:underline"
                         >
                           Open module
                         </button>
@@ -541,14 +721,15 @@ function PortalShell() {
                       </div>
                     </div>
                   );
-                })
-              )}
+                });
+              })()}
             </div>
           </div>
         </div>
       )}
 
       <ZacmaAiAssistant />
+      <SessionTimeoutModal />
       <ReceiptModal receipt={activeReceipt} onClose={() => setActiveReceipt(null)} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>

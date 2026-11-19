@@ -26,6 +26,8 @@ import {
   StatusLabel,
   TableSkeleton,
 } from '../components/PortalUI';
+import { DualCalendarDatePicker, DualDateDisplay } from '../components/DualCalendarDatePicker';
+import { todayAddisIsoDate } from '../lib/ethiopianCalendar';
 import {
   formatDateShort,
   formatEtb,
@@ -33,7 +35,6 @@ import {
   PaymentMethod,
   Receipt,
   Student,
-  todayIsoDate,
 } from '../types/zacma';
 
 const PAGE_SIZE = 8;
@@ -275,8 +276,8 @@ export function PaymentsView({ onOpenReceipt }: { onOpenReceipt: (receipt: Recei
                         </p>
                       </td>
                       <td className="py-3 px-3 text-slate-600">
-                        <p>{formatDateShort(p.paymentDate)}</p>
-                        <p className="text-[11px] text-slate-500">{p.paymentMethod}</p>
+                        <DualDateDisplay isoDate={p.paymentDate} />
+                        <p className="text-[11px] text-slate-500 mt-0.5">{p.paymentMethod}</p>
                       </td>
                       <td className="py-3 px-3 text-slate-600">
                         <p>By: {p.recordedByName}</p>
@@ -368,7 +369,7 @@ function RecordPaymentModal({
 }) {
   const [enrollmentId, setEnrollmentId] = useState(enrollments[0]?.id || '');
   const [amountEtb, setAmountEtb] = useState('');
-  const [paymentDate, setPaymentDate] = useState(todayIsoDate());
+  const [paymentDate, setPaymentDate] = useState(todayAddisIsoDate());
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CBE Birr');
   const [transactionRef, setTransactionRef] = useState('');
   const [notes, setNotes] = useState('');
@@ -470,7 +471,7 @@ function RecordPaymentModal({
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
                 Amount (ETB) <span className="text-red-600">*</span>
@@ -486,18 +487,12 @@ function RecordPaymentModal({
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg font-mono"
               />
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Payment Date <span className="text-red-600">*</span>
-              </label>
-              <input
-                type="date"
-                required
-                value={paymentDate}
-                onChange={(e) => setPaymentDate(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-              />
-            </div>
+            <DualCalendarDatePicker
+              label="Payment Date"
+              value={paymentDate}
+              onChange={setPaymentDate}
+              required
+            />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -803,7 +798,8 @@ export function ApprovalsQueueView() {
                       </div>
                       <p className="text-xs text-slate-600">
                         {p.courseName} · Paid via <strong>{p.paymentMethod}</strong> on{' '}
-                        {formatDateShort(p.paymentDate)} · Recorded by {p.recordedByName}
+                        <DualDateDisplay isoDate={p.paymentDate} inline /> · Recorded by{' '}
+                        {p.recordedByName}
                       </p>
                       {enr && (
                         <p className="text-xs text-slate-500 font-mono">
@@ -877,7 +873,14 @@ export function ApprovalsQueueView() {
                         · Plan: {s.paymentPlanCode.replace('_', ' ')}
                       </p>
                       <p className="text-xs text-slate-500">
-                        Phone: <span className="font-mono">{s.phone}</span> · {s.address} ·
+                        Registered:{' '}
+                        <DualDateDisplay
+                          isoDate={s.enrollmentDate}
+                          ethiopianOverride={s.registrationDateEthiopian}
+                          timeEat={s.registrationTimeEat}
+                          inline
+                        />{' '}
+                        · Phone: <span className="font-mono">{s.phone}</span> · {s.address} ·
                         Submitted by {s.registeredByName || 'Accountant'}
                       </p>
                     </div>

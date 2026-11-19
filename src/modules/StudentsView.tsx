@@ -24,13 +24,13 @@ import {
   StatusLabel,
   TableSkeleton,
 } from '../components/PortalUI';
+import { DualCalendarDatePicker, DualDateDisplay } from '../components/DualCalendarDatePicker';
+import { todayAddisIsoDate } from '../lib/ethiopianCalendar';
 import {
   addDaysIso,
-  formatDateShort,
   formatEtb,
   PaymentMethod,
   Student,
-  todayIsoDate,
 } from '../types/zacma';
 
 const PAGE_SIZE = 8;
@@ -269,10 +269,18 @@ export function StudentsView() {
                       </td>
                       <td className="py-3 px-3">
                         <p className="font-medium text-slate-900">{student.courseName}</p>
-                        <p className="text-[11px] text-slate-500">
-                          {formatDateShort(student.enrollmentDate)}
-                          {!isNonFinanceStaff ? ` · ${student.paymentPlanCode.replace('_', ' ')}` : ''}
-                        </p>
+                        <div className="mt-0.5 text-[11px]">
+                          <DualDateDisplay
+                            isoDate={student.enrollmentDate}
+                            ethiopianOverride={student.registrationDateEthiopian}
+                            timeEat={student.registrationTimeEat}
+                          />
+                        </div>
+                        {!isNonFinanceStaff && (
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Plan: {student.paymentPlanCode.replace('_', ' ')}
+                          </p>
+                        )}
                       </td>
                       <td className="py-3 px-3 text-slate-600">
                         <p className="font-mono text-[11px] text-slate-800">{student.phone}</p>
@@ -417,7 +425,7 @@ function RegisterStudentModal({
   const [address, setAddress] = useState('');
   const [photoUrl, setPhotoUrl] = useState<string | undefined>(undefined);
   const [courseId, setCourseId] = useState(courses[0]?.id || '');
-  const [enrollmentDate, setEnrollmentDate] = useState(todayIsoDate());
+  const [enrollmentDate, setEnrollmentDate] = useState(todayAddisIsoDate());
   const [planCode, setPlanCode] = useState(paymentPlans[1]?.code || paymentPlans[0]?.code || 'FULL');
   const [customInstallments, setCustomInstallments] = useState(2);
   const [customIntervalDays, setCustomIntervalDays] = useState(45);
@@ -600,16 +608,13 @@ function RegisterStudentModal({
                 </select>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Enrollment Date <span className="text-red-600">*</span>
-                </label>
-                <input
-                  type="date"
-                  required
+              <div className="sm:col-span-2">
+                <DualCalendarDatePicker
+                  label="Registration / Enrollment Date"
                   value={enrollmentDate}
-                  onChange={(e) => setEnrollmentDate(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-blue-700"
+                  onChange={setEnrollmentDate}
+                  required
+                  helperText="Enter in either Gregorian or Ethiopian calendar. Both dates and Addis Ababa (EAT) registration time are saved automatically."
                 />
               </div>
 
@@ -747,12 +752,15 @@ function RegisterStudentModal({
                 {schedulePreview.map((item) => (
                   <div
                     key={item.num}
-                    className="bg-white border border-slate-200 rounded-md px-3 py-2 flex items-center justify-between"
+                    className="bg-white border border-slate-200 rounded-md px-3 py-2 flex items-center justify-between gap-2"
                   >
-                    <span className="text-slate-600">
-                      #{item.num} · {formatDateShort(item.dueDate)}
-                    </span>
-                    <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                    <div className="text-slate-600">
+                      <span className="font-semibold text-slate-800">#{item.num}</span>
+                      <div className="text-[11px] mt-0.5">
+                        <DualDateDisplay isoDate={item.dueDate} />
+                      </div>
+                    </div>
+                    <span className="font-mono font-semibold text-slate-900 tabular-nums shrink-0">
                       {formatEtb(item.amount)}
                     </span>
                   </div>
@@ -894,10 +902,15 @@ function StudentProfileModal({
               <p className="font-semibold text-slate-900 mt-1">{student.gender}</p>
             </div>
             <div>
-              <p className="text-slate-500">Enrollment Date</p>
-              <p className="font-semibold text-slate-900 mt-1">
-                {formatDateShort(student.enrollmentDate)}
-              </p>
+              <p className="text-slate-500">Registration Date (Dual)</p>
+              <div className="mt-1">
+                <DualDateDisplay
+                  isoDate={student.enrollmentDate}
+                  ethiopianOverride={student.registrationDateEthiopian}
+                  timeEat={student.registrationTimeEat}
+                  compact={false}
+                />
+              </div>
             </div>
             <div>
               <p className="text-slate-500">Primary Phone</p>
@@ -966,7 +979,9 @@ function StudentProfileModal({
                         {installments.map((inst) => (
                           <tr key={inst.id}>
                             <td className="py-2 px-3 font-mono">{inst.installmentNumber}</td>
-                            <td className="py-2 px-3">{formatDateShort(inst.dueDate)}</td>
+                            <td className="py-2 px-3">
+                              <DualDateDisplay isoDate={inst.dueDate} />
+                            </td>
                             <td className="py-2 px-3 text-right font-mono tabular-nums">
                               {formatEtb(inst.amountDueEtb)}
                             </td>

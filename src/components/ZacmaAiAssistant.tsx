@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
-  Bot,
   Check,
   Copy,
   Loader2,
@@ -17,6 +16,7 @@ import {
 } from 'lucide-react';
 import { usePortal } from '../context/PortalContext';
 import { formatEtbCompact, RoleCode, todayIsoDate } from '../types/zacma';
+import { ZacmaLogo } from './ZacmaLogo';
 
 type ChatMode = 'standard' | 'fast';
 
@@ -631,12 +631,12 @@ export function ZacmaAiAssistant() {
             expanded ? 'max-w-2xl h-[680px]' : 'max-w-md h-[590px]'
           } max-h-[85vh] bg-white border border-slate-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-200`}
         >
+          {/* Subtle Brand Accent Stripe */}
+          <div className="h-1 w-full zacma-brand-stripe shrink-0" />
           {/* Header */}
           <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between gap-2 shrink-0">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-lg bg-blue-700 flex items-center justify-center shrink-0">
-                <Bot className="w-4 h-4 text-white" />
-              </div>
+              <ZacmaLogo variant="mark" size="sm" framed />
               <div className="min-w-0">
                 <p className="text-xs font-display font-bold tracking-tight truncate">
                   ZACMA AI ASSISTANT

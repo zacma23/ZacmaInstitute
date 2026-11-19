@@ -12,7 +12,7 @@ service cloud.firestore {
     // Core Primitives & Identity Helpers
     // ---------------------------------------------------------
     function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null;
     }
 
     function isValidId(id) {
@@ -28,7 +28,7 @@ service cloud.firestore {
     }
 
     function isBootstrapAdmin() {
-      return isSignedIn() && request.auth.token.email == 'zekimuluken@gmail.com';
+      return isSignedIn() && request.auth.token.email_verified == true && request.auth.token.email == 'zekimuluken@gmail.com';
     }
 
     function profileExists() {
@@ -105,12 +105,15 @@ service cloud.firestore {
 
     function isValidProfile(data) {
       return data.keys().hasAll(['uid', 'email', 'fullName', 'role', 'isActive', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'email', 'fullName', 'phone', 'role', 'linkedStudentId', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'fullName', 'phone', 'role', 'linkedStudentId', 'allowedModules', 'canExportReports', 'lastLoginAt', 'isActive', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
         && isNonEmptyString(data.email, 160)
         && isNonEmptyString(data.fullName, 120)
         && isOptionalString(data, 'phone', 30)
         && isOptionalString(data, 'linkedStudentId', 128)
+        && (!('allowedModules' in data) || (data.allowedModules is list && data.allowedModules.size() <= 16 && (data.allowedModules.size() == 0 || data.allowedModules[0] is string)))
+        && (!('canExportReports' in data) || data.canExportReports is bool)
+        && isOptionalString(data, 'lastLoginAt', 40)
         && data.role in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT']
         && data.isActive is bool
         && isNonEmptyString(data.createdAt, 40)
@@ -147,7 +150,7 @@ service cloud.firestore {
 
     function isValidStudent(data) {
       return data.keys().hasAll(['studentCode', 'fullName', 'gender', 'phone', 'address', 'courseId', 'courseName', 'enrollmentDate', 'courseFeeEtb', 'paymentPlanCode', 'registrationStatus', 'registeredBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['studentCode', 'fullName', 'gender', 'phone', 'altPhone', 'address', 'photoUrl', 'courseId', 'courseName', 'enrollmentDate', 'courseFeeEtb', 'paymentPlanCode', 'registrationStatus', 'registeredBy', 'registeredByName', 'approvedBy', 'approvedByName', 'approvedAt', 'rejectionReason', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['studentCode', 'fullName', 'gender', 'phone', 'altPhone', 'address', 'photoUrl', 'courseId', 'courseName', 'enrollmentDate', 'registrationDateEthiopian', 'registrationTimeEat', 'courseFeeEtb', 'paymentPlanCode', 'registrationStatus', 'registeredBy', 'registeredByName', 'approvedBy', 'approvedByName', 'approvedAt', 'rejectionReason', 'createdAt', 'updatedAt'])
         && isNonEmptyString(data.studentCode, 24)
         && data.studentCode.matches('^ZAC-[0-9]{4}-[0-9]{4}$')
         && isNonEmptyString(data.fullName, 120)
@@ -159,6 +162,8 @@ service cloud.firestore {
         && isNonEmptyString(data.courseId, 128)
         && isNonEmptyString(data.courseName, 120)
         && isNonEmptyString(data.enrollmentDate, 20)
+        && isOptionalString(data, 'registrationDateEthiopian', 40)
+        && isOptionalString(data, 'registrationTimeEat', 30)
         && isPositiveNumber(data.courseFeeEtb)
         && data.paymentPlanCode in ['FULL', 'MONTHLY', 'TWO_MONTH', 'THREE_MONTH', 'SIX_MONTH', 'CUSTOM']
         && data.registrationStatus in ['PENDING', 'APPROVED', 'REJECTED']
@@ -314,11 +319,14 @@ service cloud.firestore {
 
     function isValidNotification(data) {
       return data.keys().hasAll(['type', 'title', 'message', 'targetRole', 'isRead', 'createdAt'])
-        && data.keys().hasOnly(['type', 'title', 'message', 'targetRole', 'studentId', 'studentCode', 'studentName', 'courseName', 'expectedAmountEtb', 'paidAmountEtb', 'remainingBalanceEtb', 'dueDate', 'paymentStatus', 'dedupKey', 'entityType', 'entityId', 'isRead', 'createdAt'])
-        && data.type in ['DEADLINE_APPROACHING', 'OVERDUE_BALANCE', 'PENDING_REGISTRATION', 'PENDING_PAYMENT', 'REJECTED_PAYMENT', 'UPCOMING_PAYMENT', 'PAYMENT_DUE_TODAY', 'PAYMENT_OVERDUE', 'PAYMENT_RECEIVED', 'PAYMENT_APPROVED', 'PAYMENT_REJECTED', 'OUTSTANDING_BALANCE']
+        && data.keys().hasOnly(['type', 'title', 'message', 'targetRole', 'recipientUid', 'category', 'actionSection', 'studentId', 'studentCode', 'studentName', 'courseName', 'expectedAmountEtb', 'paidAmountEtb', 'remainingBalanceEtb', 'dueDate', 'paymentStatus', 'dedupKey', 'entityType', 'entityId', 'isRead', 'createdAt'])
+        && data.type in ['DEADLINE_APPROACHING', 'OVERDUE_BALANCE', 'PENDING_REGISTRATION', 'PENDING_PAYMENT', 'REJECTED_PAYMENT', 'UPCOMING_PAYMENT', 'PAYMENT_DUE_TODAY', 'PAYMENT_OVERDUE', 'PAYMENT_RECEIVED', 'PAYMENT_APPROVED', 'PAYMENT_REJECTED', 'OUTSTANDING_BALANCE', 'REGISTRATION_APPROVED', 'COURSE_ANNOUNCEMENT', 'ATTENDANCE_UPDATE', 'INSTRUCTOR_MESSAGE', 'ADMIN_ANNOUNCEMENT', 'SCHEDULE_CHANGE', 'NEW_INTERNAL_MESSAGE']
         && isNonEmptyString(data.title, 140)
         && isNonEmptyString(data.message, 420)
         && data.targetRole in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT', 'ALL']
+        && isOptionalString(data, 'recipientUid', 128)
+        && isOptionalString(data, 'category', 40)
+        && isOptionalString(data, 'actionSection', 40)
         && isOptionalString(data, 'studentId', 128)
         && isOptionalString(data, 'studentCode', 24)
         && isOptionalString(data, 'studentName', 120)
@@ -372,6 +380,206 @@ service cloud.firestore {
         && isNonEmptyString(data.createdAt, 40);
     }
 
+    function isValidSmsConfig(data) {
+      return data.keys().hasAll(['ownerPhoneNumber', 'activeProvider', 'smsEnabled', 'portalNotificationsEnabled', 'internalMessagingEnabled', 'testMode', 'allowStudentToInstructor', 'allowStudentToAdmin', 'allowStudentToStudent', 'allowAttachments', 'updatedAt'])
+        && data.keys().hasOnly(['ownerPhoneNumber', 'activeProvider', 'senderId', 'smsEnabled', 'portalNotificationsEnabled', 'internalMessagingEnabled', 'testMode', 'allowStudentToInstructor', 'allowStudentToAdmin', 'allowStudentToStudent', 'allowAttachments', 'updatedBy', 'updatedByName', 'updatedAt'])
+        && isNonEmptyString(data.ownerPhoneNumber, 30)
+        && data.activeProvider in ['afromessage', 'geezsms', 'twilio', 'africastalking']
+        && isOptionalString(data, 'senderId', 30)
+        && data.smsEnabled is bool
+        && data.portalNotificationsEnabled is bool
+        && data.internalMessagingEnabled is bool
+        && data.testMode is bool
+        && data.allowStudentToInstructor is bool
+        && data.allowStudentToAdmin is bool
+        && data.allowStudentToStudent is bool
+        && data.allowAttachments is bool
+        && isOptionalString(data, 'updatedBy', 128)
+        && isOptionalString(data, 'updatedByName', 120)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidCommunicationPolicy(data) {
+      return data.keys().hasAll(['portalNotificationsEnabled', 'internalMessagingEnabled', 'allowStudentToInstructor', 'allowStudentToAdmin', 'allowStudentToStudent', 'allowAttachments', 'updatedAt'])
+        && data.keys().hasOnly(['portalNotificationsEnabled', 'internalMessagingEnabled', 'allowStudentToInstructor', 'allowStudentToAdmin', 'allowStudentToStudent', 'allowAttachments', 'updatedAt'])
+        && data.portalNotificationsEnabled is bool
+        && data.internalMessagingEnabled is bool
+        && data.allowStudentToInstructor is bool
+        && data.allowStudentToAdmin is bool
+        && data.allowStudentToStudent is bool
+        && data.allowAttachments is bool
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidSmsTemplate(data) {
+      return data.keys().hasAll(['eventType', 'name', 'body', 'isActive', 'updatedAt'])
+        && data.keys().hasOnly(['eventType', 'name', 'body', 'isActive', 'updatedBy', 'updatedAt'])
+        && data.eventType in ['REGISTRATION_APPROVED', 'PAYMENT_REMINDER', 'PAYMENT_OVERDUE', 'PAYMENT_APPROVED', 'COURSE_ANNOUNCEMENT', 'ATTENDANCE_UPDATE', 'INSTRUCTOR_MESSAGE', 'ADMIN_ANNOUNCEMENT']
+        && isNonEmptyString(data.name, 100)
+        && isNonEmptyString(data.body, 640)
+        && data.isActive is bool
+        && isOptionalString(data, 'updatedBy', 128)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidSmsLog(data) {
+      return data.keys().hasAll(['eventType', 'recipientName', 'recipientPhone', 'messageBody', 'provider', 'mode', 'status', 'retryCount', 'sentBy', 'sentByName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['dedupKey', 'eventType', 'recipientName', 'recipientPhone', 'studentId', 'studentCode', 'courseName', 'templateId', 'messageBody', 'provider', 'mode', 'status', 'providerMessageId', 'errorMessage', 'retryCount', 'sentBy', 'sentByName', 'createdAt', 'updatedAt'])
+        && isOptionalString(data, 'dedupKey', 160)
+        && data.eventType in ['REGISTRATION_APPROVED', 'PAYMENT_REMINDER', 'PAYMENT_OVERDUE', 'PAYMENT_APPROVED', 'COURSE_ANNOUNCEMENT', 'ATTENDANCE_UPDATE', 'INSTRUCTOR_MESSAGE', 'ADMIN_ANNOUNCEMENT']
+        && isNonEmptyString(data.recipientName, 120)
+        && isNonEmptyString(data.recipientPhone, 30)
+        && isOptionalString(data, 'studentId', 128)
+        && isOptionalString(data, 'studentCode', 24)
+        && isOptionalString(data, 'courseName', 120)
+        && isOptionalString(data, 'templateId', 128)
+        && isNonEmptyString(data.messageBody, 640)
+        && data.provider in ['afromessage', 'geezsms', 'twilio', 'africastalking']
+        && data.mode in ['LIVE', 'TEST']
+        && data.status in ['PENDING', 'SENT', 'DELIVERED', 'FAILED', 'TEST_SIMULATED']
+        && isOptionalString(data, 'providerMessageId', 160)
+        && isOptionalString(data, 'errorMessage', 400)
+        && isNonNegativeNumber(data.retryCount)
+        && isNonEmptyString(data.sentBy, 128)
+        && isNonEmptyString(data.sentByName, 120)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidNotificationChannelRule(data) {
+      return data.keys().hasAll(['eventType', 'label', 'description', 'smsEnabled', 'portalEnabled', 'internalMessageEnabled', 'updatedAt'])
+        && data.keys().hasOnly(['eventType', 'label', 'description', 'smsEnabled', 'portalEnabled', 'internalMessageEnabled', 'updatedAt'])
+        && data.eventType in ['REGISTRATION_APPROVED', 'PAYMENT_REMINDER', 'PAYMENT_OVERDUE', 'PAYMENT_APPROVED', 'COURSE_ANNOUNCEMENT', 'ATTENDANCE_UPDATE', 'INSTRUCTOR_MESSAGE', 'ADMIN_ANNOUNCEMENT']
+        && isNonEmptyString(data.label, 100)
+        && isNonEmptyString(data.description, 240)
+        && data.smsEnabled is bool
+        && data.portalEnabled is bool
+        && data.internalMessageEnabled is bool
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidDirectoryUser(data) {
+      return data.keys().hasAll(['uid', 'fullName', 'role', 'isActive', 'lastSeenAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'fullName', 'role', 'linkedStudentId', 'studentCode', 'courseId', 'courseName', 'isActive', 'lastSeenAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && isNonEmptyString(data.fullName, 120)
+        && data.role in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT']
+        && isOptionalString(data, 'linkedStudentId', 128)
+        && isOptionalString(data, 'studentCode', 24)
+        && isOptionalString(data, 'courseId', 128)
+        && isOptionalString(data, 'courseName', 120)
+        && data.isActive is bool
+        && isNonEmptyString(data.lastSeenAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isBoundedStringList(val, maxLen) {
+      return val is list && val.size() <= maxLen && (val.size() == 0 || val[0] is string);
+    }
+
+    function isValidConversation(data) {
+      return data.keys().hasAll(['type', 'title', 'participantIds', 'participantLabels', 'createdBy', 'createdByName', 'createdByRole', 'readByUids', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['type', 'title', 'description', 'participantIds', 'participantLabels', 'courseId', 'courseName', 'broadcastAudience', 'createdBy', 'createdByName', 'createdByRole', 'lastMessageText', 'lastMessageAt', 'lastMessageBy', 'lastMessageByName', 'readByUids', 'createdAt', 'updatedAt'])
+        && data.type in ['DIRECT', 'GROUP', 'BROADCAST']
+        && isNonEmptyString(data.title, 140)
+        && isOptionalString(data, 'description', 300)
+        && isBoundedStringList(data.participantIds, 200)
+        && isBoundedStringList(data.participantLabels, 200)
+        && isOptionalString(data, 'courseId', 128)
+        && isOptionalString(data, 'courseName', 120)
+        && (!('broadcastAudience' in data) || data.broadcastAudience in ['ALL_USERS', 'ALL_STUDENTS', 'ALL_INSTRUCTORS', 'ALL_ACCOUNTANTS', 'ALL_STAFF', 'COURSE', 'CUSTOM'])
+        && isNonEmptyString(data.createdBy, 128)
+        && isNonEmptyString(data.createdByName, 120)
+        && data.createdByRole in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT']
+        && isOptionalString(data, 'lastMessageText', 300)
+        && isOptionalString(data, 'lastMessageAt', 40)
+        && isOptionalString(data, 'lastMessageBy', 128)
+        && isOptionalString(data, 'lastMessageByName', 120)
+        && isBoundedStringList(data.readByUids, 200)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidInternalMessage(data) {
+      return data.keys().hasAll(['conversationId', 'senderId', 'senderName', 'senderRole', 'body', 'readByUids', 'createdAt'])
+        && data.keys().hasOnly(['conversationId', 'senderId', 'senderName', 'senderRole', 'body', 'replyToId', 'replyToSender', 'replyToPreview', 'attachmentName', 'attachmentType', 'attachmentSize', 'attachmentDataUrl', 'readByUids', 'createdAt'])
+        && isValidId(data.conversationId)
+        && isNonEmptyString(data.senderId, 128)
+        && isNonEmptyString(data.senderName, 120)
+        && data.senderRole in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT']
+        && isNonEmptyString(data.body, 2000)
+        && isOptionalString(data, 'replyToId', 128)
+        && isOptionalString(data, 'replyToSender', 120)
+        && isOptionalString(data, 'replyToPreview', 200)
+        && isOptionalString(data, 'attachmentName', 160)
+        && isOptionalString(data, 'attachmentType', 100)
+        && isOptionalNumber(data, 'attachmentSize')
+        && isOptionalString(data, 'attachmentDataUrl', 650000)
+        && isBoundedStringList(data.readByUids, 200)
+        && isNonEmptyString(data.createdAt, 40);
+    }
+
+    function isValidFinancialAdjustment(data) {
+      return data.keys().hasAll(['adjustmentRef', 'enrollmentId', 'studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'type', 'amountEtb', 'effectiveDate', 'reason', 'approvedBy', 'approvedByName', 'createdAt'])
+        && data.keys().hasOnly(['adjustmentRef', 'enrollmentId', 'studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'paymentId', 'type', 'amountEtb', 'effectiveDate', 'reason', 'approvedBy', 'approvedByName', 'createdAt'])
+        && isNonEmptyString(data.adjustmentRef, 64)
+        && data.adjustmentRef.matches('^[A-Za-z0-9\\-_]+$')
+        && isNonEmptyString(data.enrollmentId, 128)
+        && isNonEmptyString(data.studentId, 128)
+        && isNonEmptyString(data.studentCode, 24)
+        && isNonEmptyString(data.studentName, 120)
+        && isNonEmptyString(data.courseId, 128)
+        && isNonEmptyString(data.courseName, 120)
+        && isOptionalString(data, 'paymentId', 128)
+        && data.type in ['REFUND', 'REVERSAL', 'SCHOLARSHIP_DISCOUNT', 'FEE_ADJUSTMENT']
+        && isPositiveNumber(data.amountEtb)
+        && isNonEmptyString(data.effectiveDate, 20)
+        && isNonEmptyString(data.reason, 400)
+        && isNonEmptyString(data.approvedBy, 128)
+        && isNonEmptyString(data.approvedByName, 120)
+        && isNonEmptyString(data.createdAt, 40);
+    }
+
+    function isValidSecurityConfig(data) {
+      return data.keys().hasAll(['adminTimeoutMinutes', 'userTimeoutMinutes', 'warningBeforeSeconds', 'maxFailedLogins', 'lockoutMinutes', 'enforceAuditOnExports', 'updatedAt'])
+        && data.keys().hasOnly(['adminTimeoutMinutes', 'userTimeoutMinutes', 'warningBeforeSeconds', 'maxFailedLogins', 'lockoutMinutes', 'enforceAuditOnExports', 'updatedBy', 'updatedByName', 'updatedAt'])
+        && isPositiveNumber(data.adminTimeoutMinutes) && data.adminTimeoutMinutes <= 120
+        && isPositiveNumber(data.userTimeoutMinutes) && data.userTimeoutMinutes <= 120
+        && isPositiveNumber(data.warningBeforeSeconds) && data.warningBeforeSeconds <= 300
+        && isPositiveNumber(data.maxFailedLogins) && data.maxFailedLogins <= 20
+        && isPositiveNumber(data.lockoutMinutes) && data.lockoutMinutes <= 120
+        && data.enforceAuditOnExports is bool
+        && isOptionalString(data, 'updatedBy', 128)
+        && isOptionalString(data, 'updatedByName', 120)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidLoginHistory(data) {
+      return data.keys().hasAll(['userId', 'email', 'fullName', 'role', 'eventType', 'authMethod', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'email', 'fullName', 'role', 'eventType', 'authMethod', 'userAgent', 'sessionId', 'detail', 'createdAt'])
+        && isNonEmptyString(data.userId, 128)
+        && isNonEmptyString(data.email, 160)
+        && isNonEmptyString(data.fullName, 120)
+        && data.role in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT']
+        && data.eventType in ['LOGIN', 'LOGOUT', 'SESSION_EXPIRED', 'FAILED_LOGIN', 'LOCKOUT']
+        && data.authMethod in ['EMAIL_PASSWORD', 'GOOGLE', 'SYSTEM']
+        && isOptionalString(data, 'userAgent', 240)
+        && isOptionalString(data, 'sessionId', 128)
+        && isOptionalString(data, 'detail', 300)
+        && isNonEmptyString(data.createdAt, 40);
+    }
+
+    function isConversationMember(convData) {
+      return request.auth.uid in convData.participantIds
+        || (convData.type == 'BROADCAST' && (
+          convData.broadcastAudience == 'ALL_USERS'
+          || (convData.broadcastAudience == 'ALL_STUDENTS' && isStudent())
+          || (convData.broadcastAudience == 'ALL_INSTRUCTORS' && isInstructor())
+          || (convData.broadcastAudience == 'ALL_ACCOUNTANTS' && isAccountant())
+          || (convData.broadcastAudience == 'ALL_STAFF' && isStaff())
+        ));
+    }
+
     // ---------------------------------------------------------
     // Connection test document
     // ---------------------------------------------------------
@@ -397,11 +605,18 @@ service cloud.firestore {
       allow list: if isSignedIn() && isAdmin();
       allow create: if isSignedIn() && isValidId(profileId) && isValidProfile(incoming()) && (
         isAdmin() ||
-        (profileId == request.auth.uid && incoming().uid == request.auth.uid && incoming().email == request.auth.token.email && (isBootstrapAdmin() ? incoming().role == 'ADMIN' : incoming().role == 'INSTRUCTOR') && incoming().isActive == true)
+        (profileId == request.auth.uid
+          && incoming().uid == request.auth.uid
+          && incoming().email == request.auth.token.email
+          && !('linkedStudentId' in incoming())
+          && !('allowedModules' in incoming())
+          && !('canExportReports' in incoming())
+          && (isBootstrapAdmin() ? incoming().role == 'ADMIN' : incoming().role in ['INSTRUCTOR', 'STUDENT'])
+          && incoming().isActive == true)
       );
       allow update: if isSignedIn() && isValidId(profileId) && isValidProfile(incoming()) && (
         isAdmin() ||
-        (profileId == request.auth.uid && incoming().uid == existing().uid && incoming().role == existing().role && incoming().isActive == existing().isActive && incoming().createdAt == existing().createdAt && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'updatedAt']))
+        (profileId == request.auth.uid && incoming().uid == existing().uid && incoming().role == existing().role && incoming().isActive == existing().isActive && incoming().createdAt == existing().createdAt && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'lastLoginAt', 'updatedAt']))
       );
       allow delete: if isSignedIn() && isValidId(profileId) && isAdmin() && profileId != request.auth.uid;
     }
@@ -542,11 +757,11 @@ service cloud.firestore {
     }
 
     // ---------------------------------------------------------
-    // 13. Attendance (Instructors & Admins manage; Staff reads)
+    // 13. Attendance (Instructors & Admins manage; Staff reads; Student reads strictly own only)
     // ---------------------------------------------------------
     match /attendance/{attendanceId} {
-      allow get: if isSignedIn() && isValidId(attendanceId) && isStaff();
-      allow list: if isSignedIn() && isStaff();
+      allow get: if isSignedIn() && isValidId(attendanceId) && (isStaff() || isOwnStudentRecord(existing().studentId));
+      allow list: if isSignedIn() && (isStaff() || isOwnStudentRecord(existing().studentId));
       allow create: if isSignedIn() && isValidId(attendanceId) && isValidAttendance(incoming()) && (
         isAdmin() ||
         (isInstructor() && incoming().recordedBy == request.auth.uid)
@@ -559,15 +774,36 @@ service cloud.firestore {
     }
 
     // ---------------------------------------------------------
-    // 14. Notifications (Role-scoped & Student-own reads; Deduplicated reminder writes)
+    // 14. Notifications (Role-scoped, UID-scoped, & Student-own reads)
     // ---------------------------------------------------------
     match /notifications/{notificationId} {
-      allow get: if isSignedIn() && isValidId(notificationId) && (isStaff() || (isStudent() && ('studentId' in existing()) && isOwnStudentRecord(existing().studentId)));
-      allow list: if isSignedIn() && (isStaff() || (isStudent() && ('studentId' in existing()) && isOwnStudentRecord(existing().studentId)));
-      allow create: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming()) && isFinanceStaff();
+      allow get: if isSignedIn() && isValidId(notificationId) && (
+        isStaff() ||
+        (isStudent() && (
+          (('studentId' in existing()) && isOwnStudentRecord(existing().studentId)) ||
+          (('recipientUid' in existing()) && existing().recipientUid == request.auth.uid) ||
+          existing().targetRole == 'ALL'
+        ))
+      );
+      allow list: if isSignedIn() && (
+        isStaff() ||
+        (isStudent() && (
+          (('studentId' in existing()) && isOwnStudentRecord(existing().studentId)) ||
+          (('recipientUid' in existing()) && existing().recipientUid == request.auth.uid) ||
+          existing().targetRole == 'ALL'
+        ))
+      );
+      allow create: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming()) && (
+        isStaff() ||
+        (isStudent() && incoming().type == 'NEW_INTERNAL_MESSAGE' && ('recipientUid' in incoming()))
+      );
       allow update: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming()) && (
         isAdmin() ||
-        ((isStaff() || (isStudent() && ('studentId' in existing()) && isOwnStudentRecord(existing().studentId))) && incoming().diff(existing()).affectedKeys().hasOnly(['isRead']))
+        ((isStaff() || (isStudent() && (
+          (('studentId' in existing()) && isOwnStudentRecord(existing().studentId)) ||
+          (('recipientUid' in existing()) && existing().recipientUid == request.auth.uid) ||
+          existing().targetRole == 'ALL'
+        ))) && incoming().diff(existing()).affectedKeys().hasOnly(['isRead']))
       );
       allow delete: if isSignedIn() && isValidId(notificationId) && isAdmin();
     }
@@ -601,7 +837,160 @@ service cloud.firestore {
     match /audit_logs/{logId} {
       allow get: if isSignedIn() && isValidId(logId) && isAdmin();
       allow list: if isSignedIn() && isAdmin();
-      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming()) && isStaff() && incoming().actorId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming()) && (isStaff() || isStudent()) && incoming().actorId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // 18. SMS Configuration (Non-secret settings; Finance reads, Admin manages)
+    // ---------------------------------------------------------
+    match /sms_config/{configId} {
+      allow get: if isSignedIn() && isValidId(configId) && isFinanceStaff();
+      allow list: if isSignedIn() && isFinanceStaff();
+      allow create, update: if isSignedIn() && isValidId(configId) && isValidSmsConfig(incoming()) && isAdmin();
+      allow delete: if isSignedIn() && isValidId(configId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 19. Communication Policy (PII-free feature flags; All signed-in read, Admin manages)
+    // ---------------------------------------------------------
+    match /communication_policy/{policyId} {
+      allow get: if isSignedIn() && isValidId(policyId) && (isStaff() || isStudent());
+      allow list: if isSignedIn() && isAdmin();
+      allow create, update: if isSignedIn() && isValidId(policyId) && isValidCommunicationPolicy(incoming()) && isAdmin();
+      allow delete: if isSignedIn() && isValidId(policyId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 20. SMS Message Templates (Finance reads, Admin manages)
+    // ---------------------------------------------------------
+    match /sms_templates/{templateId} {
+      allow get: if isSignedIn() && isValidId(templateId) && isFinanceStaff();
+      allow list: if isSignedIn() && isFinanceStaff();
+      allow create, update: if isSignedIn() && isValidId(templateId) && isValidSmsTemplate(incoming()) && isAdmin();
+      allow delete: if isSignedIn() && isValidId(templateId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 21. SMS Delivery Logs (Finance creates & reads; Admin retries; immutable history)
+    // ---------------------------------------------------------
+    match /sms_logs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && isFinanceStaff();
+      allow list: if isSignedIn() && isFinanceStaff();
+      allow create: if isSignedIn() && isValidId(logId) && isValidSmsLog(incoming()) && isFinanceStaff() && incoming().sentBy == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(logId) && isValidSmsLog(incoming()) && incoming().createdAt == existing().createdAt && isAdmin();
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // 22. Unified Notification Channel Rules Matrix (Staff reads, Admin manages)
+    // ---------------------------------------------------------
+    match /notification_channel_rules/{ruleId} {
+      allow get: if isSignedIn() && isValidId(ruleId) && isStaff();
+      allow list: if isSignedIn() && isStaff();
+      allow create, update: if isSignedIn() && isValidId(ruleId) && isValidNotificationChannelRule(incoming()) && isAdmin();
+      allow delete: if isSignedIn() && isValidId(ruleId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 23. Directory Users (PII-isolated messaging directory: no email/phone/address)
+    // ---------------------------------------------------------
+    match /directory_users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isStaff() || isStudent());
+      allow list: if isSignedIn() && (isAdmin() || ((isStaff() || isStudent()) && existing().isActive == true));
+      allow create, update: if isSignedIn() && isValidId(userId) && isValidDirectoryUser(incoming()) && (
+        isAdmin() ||
+        (userId == request.auth.uid
+          && incoming().uid == request.auth.uid
+          && profileExists()
+          && incoming().role == myProfile().role
+          && incoming().isActive == myProfile().isActive)
+      );
+      allow delete: if isSignedIn() && isValidId(userId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 24. Internal Conversations (Strict participant & audience isolation)
+    // ---------------------------------------------------------
+    match /conversations/{conversationId} {
+      allow get: if isSignedIn() && isValidId(conversationId) && (isAdmin() || isConversationMember(existing()));
+      allow list: if isSignedIn() && (isAdmin() || isConversationMember(existing()));
+      allow create: if isSignedIn() && isValidId(conversationId) && isValidConversation(incoming()) && incoming().createdBy == request.auth.uid && (
+        isAdmin() ||
+        (incoming().type == 'DIRECT' && request.auth.uid in incoming().participantIds && incoming().participantIds.size() == 2) ||
+        (incoming().type == 'GROUP' && isStaff() && request.auth.uid in incoming().participantIds)
+      );
+      allow update: if isSignedIn() && isValidId(conversationId) && isValidConversation(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().createdBy == existing().createdBy
+        && incoming().type == existing().type
+        && (
+          isAdmin() ||
+          (isConversationMember(existing()) && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageText', 'lastMessageAt', 'lastMessageBy', 'lastMessageByName', 'readByUids', 'updatedAt']))
+        );
+      allow delete: if isSignedIn() && isValidId(conversationId) && isAdmin();
+
+      // Master-Gated Messages Subcollection (Pillar 1: syncs with parent conversation membership)
+      match /messages/{messageId} {
+        allow get: if isSignedIn() && isValidId(conversationId) && isValidId(messageId) && (
+          isAdmin() ||
+          isConversationMember(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+        );
+        allow list: if isSignedIn() && isValidId(conversationId) && (
+          isAdmin() ||
+          isConversationMember(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+        );
+        allow create: if isSignedIn() && isValidId(conversationId) && isValidId(messageId)
+          && isValidInternalMessage(incoming())
+          && incoming().conversationId == conversationId
+          && incoming().senderId == request.auth.uid
+          && exists(/databases/$(database)/documents/conversations/$(conversationId))
+          && (
+            isAdmin() ||
+            (isConversationMember(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+              && get(/databases/$(database)/documents/conversations/$(conversationId)).data.type != 'BROADCAST')
+          );
+        allow update: if isSignedIn() && isValidId(conversationId) && isValidId(messageId)
+          && isValidInternalMessage(incoming())
+          && incoming().conversationId == existing().conversationId
+          && incoming().senderId == existing().senderId
+          && incoming().createdAt == existing().createdAt
+          && (
+            isAdmin() ||
+            (isConversationMember(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['readByUids']))
+          );
+        allow delete: if isSignedIn() && isValidId(conversationId) && isValidId(messageId) && isAdmin();
+      }
+    }
+
+    // ---------------------------------------------------------
+    // 25. Financial Adjustments & Refunds (Immutable Admin ledger; never deletes approved payments)
+    // ---------------------------------------------------------
+    match /financial_adjustments/{adjustmentId} {
+      allow get: if isSignedIn() && isValidId(adjustmentId) && (isFinanceStaff() || isOwnStudentRecord(existing().studentId));
+      allow list: if isSignedIn() && (isFinanceStaff() || isOwnStudentRecord(existing().studentId));
+      allow create: if isSignedIn() && isValidId(adjustmentId) && isValidFinancialAdjustment(incoming()) && isAdmin() && incoming().approvedBy == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // 26. Security & Session Timeout Policy (All signed-in read default; Admin manages)
+    // ---------------------------------------------------------
+    match /security_config/{configId} {
+      allow get: if isSignedIn() && isValidId(configId) && (isStaff() || isStudent());
+      allow list: if isSignedIn() && isAdmin();
+      allow create, update: if isSignedIn() && isValidId(configId) && isValidSecurityConfig(incoming()) && isAdmin();
+      allow delete: if isSignedIn() && isValidId(configId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 27. Login & Session History (Immutable; Admin reads all, users read & append own)
+    // ---------------------------------------------------------
+    match /login_history/{entryId} {
+      allow get: if isSignedIn() && isValidId(entryId) && (isAdmin() || existing().userId == request.auth.uid);
+      allow list: if isSignedIn() && (isAdmin() || existing().userId == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(entryId) && isValidLoginHistory(incoming()) && (isStaff() || isStudent()) && incoming().userId == request.auth.uid;
       allow update, delete: if false;
     }
   }

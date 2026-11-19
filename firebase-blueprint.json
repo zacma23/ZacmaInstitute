@@ -23,6 +23,9 @@
         "phone": { "type": "string", "maxLength": 30 },
         "role": { "type": "string", "enum": ["ADMIN", "ACCOUNTANT", "INSTRUCTOR", "GENERAL_STAFF", "STUDENT"] },
         "linkedStudentId": { "type": "string", "maxLength": 128 },
+        "allowedModules": { "type": "array", "description": "Optional granular module allowlist for General Staff." },
+        "canExportReports": { "type": "boolean", "description": "Explicit Admin authorization allowing an Accountant to export financial Excel reports." },
+        "lastLoginAt": { "type": "string", "format": "date-time" },
         "isActive": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -78,6 +81,8 @@
         "courseId": { "type": "string", "maxLength": 128 },
         "courseName": { "type": "string", "maxLength": 120 },
         "enrollmentDate": { "type": "string", "maxLength": 20 },
+        "registrationDateEthiopian": { "type": "string", "maxLength": 40 },
+        "registrationTimeEat": { "type": "string", "maxLength": 30 },
         "courseFeeEtb": { "type": "number" },
         "paymentPlanCode": { "type": "string", "maxLength": 30 },
         "registrationStatus": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
@@ -257,13 +262,16 @@
     },
     "Notification": {
       "title": "Notification",
-      "description": "Role-targeted or student-specific alert for deadlines, overdue balances, and payment events.",
+      "description": "Role-targeted, user-targeted, or student-specific alert for deadlines, payments, courses, attendance, and messages.",
       "type": "object",
       "properties": {
-        "type": { "type": "string", "enum": ["DEADLINE_APPROACHING", "OVERDUE_BALANCE", "PENDING_REGISTRATION", "PENDING_PAYMENT", "REJECTED_PAYMENT", "UPCOMING_PAYMENT", "PAYMENT_DUE_TODAY", "PAYMENT_OVERDUE", "PAYMENT_RECEIVED", "PAYMENT_APPROVED", "PAYMENT_REJECTED", "OUTSTANDING_BALANCE"] },
+        "type": { "type": "string", "enum": ["DEADLINE_APPROACHING", "OVERDUE_BALANCE", "PENDING_REGISTRATION", "PENDING_PAYMENT", "REJECTED_PAYMENT", "UPCOMING_PAYMENT", "PAYMENT_DUE_TODAY", "PAYMENT_OVERDUE", "PAYMENT_RECEIVED", "PAYMENT_APPROVED", "PAYMENT_REJECTED", "OUTSTANDING_BALANCE", "REGISTRATION_APPROVED", "COURSE_ANNOUNCEMENT", "ATTENDANCE_UPDATE", "INSTRUCTOR_MESSAGE", "ADMIN_ANNOUNCEMENT", "SCHEDULE_CHANGE", "NEW_INTERNAL_MESSAGE"] },
         "title": { "type": "string", "maxLength": 140 },
         "message": { "type": "string", "maxLength": 420 },
         "targetRole": { "type": "string", "enum": ["ADMIN", "ACCOUNTANT", "INSTRUCTOR", "GENERAL_STAFF", "STUDENT", "ALL"] },
+        "recipientUid": { "type": "string", "maxLength": 128 },
+        "category": { "type": "string", "maxLength": 40 },
+        "actionSection": { "type": "string", "maxLength": 40 },
         "studentId": { "type": "string", "maxLength": 128 },
         "studentCode": { "type": "string", "maxLength": 24 },
         "studentName": { "type": "string", "maxLength": 120 },
@@ -297,6 +305,165 @@
       },
       "required": ["userId", "inAppEnabled", "emailEnabled", "smsEnabled", "whatsappEnabled", "upcomingLeadDays", "overdueRepeatDays", "updatedAt"]
     },
+    "SmsConfig": {
+      "title": "SmsConfig",
+      "description": "Non-secret SMS gateway configuration and owner contact number managed by Admin.",
+      "type": "object",
+      "properties": {
+        "ownerPhoneNumber": { "type": "string", "maxLength": 30 },
+        "activeProvider": { "type": "string", "enum": ["afromessage", "geezsms", "twilio", "africastalking"] },
+        "senderId": { "type": "string", "maxLength": 30 },
+        "smsEnabled": { "type": "boolean" },
+        "portalNotificationsEnabled": { "type": "boolean" },
+        "internalMessagingEnabled": { "type": "boolean" },
+        "testMode": { "type": "boolean" },
+        "allowStudentToInstructor": { "type": "boolean" },
+        "allowStudentToAdmin": { "type": "boolean" },
+        "allowStudentToStudent": { "type": "boolean" },
+        "allowAttachments": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedByName": { "type": "string", "maxLength": 120 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerPhoneNumber", "activeProvider", "smsEnabled", "portalNotificationsEnabled", "internalMessagingEnabled", "testMode", "allowStudentToInstructor", "allowStudentToAdmin", "allowStudentToStudent", "allowAttachments", "updatedAt"]
+    },
+    "CommunicationPolicy": {
+      "title": "CommunicationPolicy",
+      "description": "Non-PII system-wide messaging and portal notification feature flags readable by all signed-in users.",
+      "type": "object",
+      "properties": {
+        "portalNotificationsEnabled": { "type": "boolean" },
+        "internalMessagingEnabled": { "type": "boolean" },
+        "allowStudentToInstructor": { "type": "boolean" },
+        "allowStudentToAdmin": { "type": "boolean" },
+        "allowStudentToStudent": { "type": "boolean" },
+        "allowAttachments": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["portalNotificationsEnabled", "internalMessagingEnabled", "allowStudentToInstructor", "allowStudentToAdmin", "allowStudentToStudent", "allowAttachments", "updatedAt"]
+    },
+    "SmsTemplate": {
+      "title": "SmsTemplate",
+      "description": "Editable SMS message template per institutional event type.",
+      "type": "object",
+      "properties": {
+        "eventType": { "type": "string", "enum": ["REGISTRATION_APPROVED", "PAYMENT_REMINDER", "PAYMENT_OVERDUE", "PAYMENT_APPROVED", "COURSE_ANNOUNCEMENT", "ATTENDANCE_UPDATE", "INSTRUCTOR_MESSAGE", "ADMIN_ANNOUNCEMENT"] },
+        "name": { "type": "string", "maxLength": 100 },
+        "body": { "type": "string", "maxLength": 640 },
+        "isActive": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["eventType", "name", "body", "isActive", "updatedAt"]
+    },
+    "SmsLog": {
+      "title": "SmsLog",
+      "description": "Auditable SMS delivery log with event deduplication key and retry counter.",
+      "type": "object",
+      "properties": {
+        "dedupKey": { "type": "string", "maxLength": 160 },
+        "eventType": { "type": "string", "enum": ["REGISTRATION_APPROVED", "PAYMENT_REMINDER", "PAYMENT_OVERDUE", "PAYMENT_APPROVED", "COURSE_ANNOUNCEMENT", "ATTENDANCE_UPDATE", "INSTRUCTOR_MESSAGE", "ADMIN_ANNOUNCEMENT"] },
+        "recipientName": { "type": "string", "maxLength": 120 },
+        "recipientPhone": { "type": "string", "maxLength": 30 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentCode": { "type": "string", "maxLength": 24 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "templateId": { "type": "string", "maxLength": 128 },
+        "messageBody": { "type": "string", "maxLength": 640 },
+        "provider": { "type": "string", "enum": ["afromessage", "geezsms", "twilio", "africastalking"] },
+        "mode": { "type": "string", "enum": ["LIVE", "TEST"] },
+        "status": { "type": "string", "enum": ["PENDING", "SENT", "DELIVERED", "FAILED", "TEST_SIMULATED"] },
+        "providerMessageId": { "type": "string", "maxLength": 160 },
+        "errorMessage": { "type": "string", "maxLength": 400 },
+        "retryCount": { "type": "number" },
+        "sentBy": { "type": "string", "maxLength": 128 },
+        "sentByName": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["eventType", "recipientName", "recipientPhone", "messageBody", "provider", "mode", "status", "retryCount", "sentBy", "sentByName", "createdAt", "updatedAt"]
+    },
+    "NotificationChannelRule": {
+      "title": "NotificationChannelRule",
+      "description": "Centralized channel matrix controlling SMS, Portal, and Internal Message dispatch per event.",
+      "type": "object",
+      "properties": {
+        "eventType": { "type": "string", "enum": ["REGISTRATION_APPROVED", "PAYMENT_REMINDER", "PAYMENT_OVERDUE", "PAYMENT_APPROVED", "COURSE_ANNOUNCEMENT", "ATTENDANCE_UPDATE", "INSTRUCTOR_MESSAGE", "ADMIN_ANNOUNCEMENT"] },
+        "label": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 240 },
+        "smsEnabled": { "type": "boolean" },
+        "portalEnabled": { "type": "boolean" },
+        "internalMessageEnabled": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["eventType", "label", "description", "smsEnabled", "portalEnabled", "internalMessageEnabled", "updatedAt"]
+    },
+    "DirectoryUser": {
+      "title": "DirectoryUser",
+      "description": "PII-isolated messaging directory entry (no email, phone, or address) for internal chat discovery and presence.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "fullName": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "enum": ["ADMIN", "ACCOUNTANT", "INSTRUCTOR", "GENERAL_STAFF", "STUDENT"] },
+        "linkedStudentId": { "type": "string", "maxLength": 128 },
+        "studentCode": { "type": "string", "maxLength": 24 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "isActive": { "type": "boolean" },
+        "lastSeenAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "fullName", "role", "isActive", "lastSeenAt", "updatedAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Direct, Group, or Broadcast internal messaging thread with strict participant isolation.",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["DIRECT", "GROUP", "BROADCAST"] },
+        "title": { "type": "string", "maxLength": 140 },
+        "description": { "type": "string", "maxLength": 300 },
+        "participantIds": { "type": "array", "description": "Bounded participant UID list (<= 200)." },
+        "participantLabels": { "type": "array", "description": "Bounded display labels (uid|name|role)." },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "broadcastAudience": { "type": "string", "enum": ["ALL_USERS", "ALL_STUDENTS", "ALL_INSTRUCTORS", "ALL_ACCOUNTANTS", "ALL_STAFF", "COURSE", "CUSTOM"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdByName": { "type": "string", "maxLength": 120 },
+        "createdByRole": { "type": "string", "enum": ["ADMIN", "ACCOUNTANT", "INSTRUCTOR", "GENERAL_STAFF", "STUDENT"] },
+        "lastMessageText": { "type": "string", "maxLength": 300 },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "lastMessageBy": { "type": "string", "maxLength": 128 },
+        "lastMessageByName": { "type": "string", "maxLength": 120 },
+        "readByUids": { "type": "array", "description": "Bounded UIDs that have read the latest message." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "title", "participantIds", "participantLabels", "createdBy", "createdByName", "createdByRole", "readByUids", "createdAt", "updatedAt"]
+    },
+    "InternalMessage": {
+      "title": "InternalMessage",
+      "description": "Individual message inside a conversation with optional reply context and validated file attachment.",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string", "maxLength": 128 },
+        "senderId": { "type": "string", "maxLength": 128 },
+        "senderName": { "type": "string", "maxLength": 120 },
+        "senderRole": { "type": "string", "enum": ["ADMIN", "ACCOUNTANT", "INSTRUCTOR", "GENERAL_STAFF", "STUDENT"] },
+        "body": { "type": "string", "maxLength": 2000 },
+        "replyToId": { "type": "string", "maxLength": 128 },
+        "replyToSender": { "type": "string", "maxLength": 120 },
+        "replyToPreview": { "type": "string", "maxLength": 200 },
+        "attachmentName": { "type": "string", "maxLength": 160 },
+        "attachmentType": { "type": "string", "maxLength": 100 },
+        "attachmentSize": { "type": "number" },
+        "attachmentDataUrl": { "type": "string", "maxLength": 650000 },
+        "readByUids": { "type": "array", "description": "Bounded UIDs that have read this message." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["conversationId", "senderId", "senderName", "senderRole", "body", "readByUids", "createdAt"]
+    },
     "SchemaMigration": {
       "title": "SchemaMigration",
       "description": "Versioned additive migration ledger recording completed schema versions.",
@@ -326,6 +493,64 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["actorId", "actorName", "actorRole", "action", "entityType", "entityId", "summary", "createdAt"]
+    },
+    "FinancialAdjustment": {
+      "title": "FinancialAdjustment",
+      "description": "Immutable Admin-approved refund, reversal, scholarship discount, or fee adjustment entry (never deletes approved payments).",
+      "type": "object",
+      "properties": {
+        "adjustmentRef": { "type": "string", "maxLength": 64 },
+        "enrollmentId": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentCode": { "type": "string", "maxLength": 24 },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "paymentId": { "type": "string", "maxLength": 128 },
+        "type": { "type": "string", "enum": ["REFUND", "REVERSAL", "SCHOLARSHIP_DISCOUNT", "FEE_ADJUSTMENT"] },
+        "amountEtb": { "type": "number" },
+        "effectiveDate": { "type": "string", "maxLength": 20 },
+        "reason": { "type": "string", "maxLength": 400 },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "approvedByName": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["adjustmentRef", "enrollmentId", "studentId", "studentCode", "studentName", "courseId", "courseName", "type", "amountEtb", "effectiveDate", "reason", "approvedBy", "approvedByName", "createdAt"]
+    },
+    "SecurityConfig": {
+      "title": "SecurityConfig",
+      "description": "Institutional inactivity auto-logout timeouts, lockout thresholds, and export audit settings managed by Admin.",
+      "type": "object",
+      "properties": {
+        "adminTimeoutMinutes": { "type": "number" },
+        "userTimeoutMinutes": { "type": "number" },
+        "warningBeforeSeconds": { "type": "number" },
+        "maxFailedLogins": { "type": "number" },
+        "lockoutMinutes": { "type": "number" },
+        "enforceAuditOnExports": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedByName": { "type": "string", "maxLength": 120 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["adminTimeoutMinutes", "userTimeoutMinutes", "warningBeforeSeconds", "maxFailedLogins", "lockoutMinutes", "enforceAuditOnExports", "updatedAt"]
+    },
+    "LoginHistory": {
+      "title": "LoginHistory",
+      "description": "Append-only authentication and session lifecycle audit log.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 160 },
+        "fullName": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "enum": ["ADMIN", "ACCOUNTANT", "INSTRUCTOR", "GENERAL_STAFF", "STUDENT"] },
+        "eventType": { "type": "string", "enum": ["LOGIN", "LOGOUT", "SESSION_EXPIRED", "FAILED_LOGIN", "LOCKOUT"] },
+        "authMethod": { "type": "string", "enum": ["EMAIL_PASSWORD", "GOOGLE", "SYSTEM"] },
+        "userAgent": { "type": "string", "maxLength": 240 },
+        "sessionId": { "type": "string", "maxLength": 128 },
+        "detail": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "email", "fullName", "role", "eventType", "authMethod", "createdAt"]
     }
   },
   "firestore": {
@@ -342,9 +567,20 @@
     "/expense_categories/{categoryId}": { "schema": { "$ref": "#/entities/ExpenseCategory" }, "description": "Expense categories." },
     "/expenses/{expenseId}": { "schema": { "$ref": "#/entities/Expense" }, "description": "Operational expense ledger." },
     "/attendance/{attendanceId}": { "schema": { "$ref": "#/entities/Attendance" }, "description": "Daily student attendance records." },
-    "/notifications/{notificationId}": { "schema": { "$ref": "#/entities/Notification" }, "description": "Dashboard and student payment reminder notifications." },
+    "/notifications/{notificationId}": { "schema": { "$ref": "#/entities/Notification" }, "description": "Dashboard, student, course, attendance, and message notifications." },
     "/notification_preferences/{prefId}": { "schema": { "$ref": "#/entities/NotificationPreference" }, "description": "User notification delivery preferences." },
+    "/sms_config/{configId}": { "schema": { "$ref": "#/entities/SmsConfig" }, "description": "Non-secret SMS gateway configuration and owner contact." },
+    "/communication_policy/{policyId}": { "schema": { "$ref": "#/entities/CommunicationPolicy" }, "description": "PII-free messaging & portal notification policy flags." },
+    "/sms_templates/{templateId}": { "schema": { "$ref": "#/entities/SmsTemplate" }, "description": "Editable event-based SMS message templates." },
+    "/sms_logs/{logId}": { "schema": { "$ref": "#/entities/SmsLog" }, "description": "Deduplicated SMS delivery history and retry ledger." },
+    "/notification_channel_rules/{ruleId}": { "schema": { "$ref": "#/entities/NotificationChannelRule" }, "description": "Centralized per-event channel matrix (SMS, Portal, Internal Message)." },
+    "/directory_users/{userId}": { "schema": { "$ref": "#/entities/DirectoryUser" }, "description": "PII-free directory of active ZACMA users for internal messaging." },
+    "/conversations/{conversationId}": { "schema": { "$ref": "#/entities/Conversation" }, "description": "Direct, Group, and Broadcast internal conversations." },
+    "/conversations/{conversationId}/messages/{messageId}": { "schema": { "$ref": "#/entities/InternalMessage" }, "description": "Individual messages inside an authorized conversation." },
     "/schema_migrations/{migId}": { "schema": { "$ref": "#/entities/SchemaMigration" }, "description": "Versioned additive migration ledger." },
-    "/audit_logs/{logId}": { "schema": { "$ref": "#/entities/AuditLog" }, "description": "Append-only immutable audit logs." }
+    "/audit_logs/{logId}": { "schema": { "$ref": "#/entities/AuditLog" }, "description": "Append-only immutable audit logs." },
+    "/financial_adjustments/{adjustmentId}": { "schema": { "$ref": "#/entities/FinancialAdjustment" }, "description": "Immutable Admin-approved refunds, reversals, discounts, and fee adjustments." },
+    "/security_config/{configId}": { "schema": { "$ref": "#/entities/SecurityConfig" }, "description": "Inactivity auto-logout and login lockout policy settings." },
+    "/login_history/{entryId}": { "schema": { "$ref": "#/entities/LoginHistory" }, "description": "Append-only login, logout, and session expiration history." }
   }
 }
