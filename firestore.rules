@@ -1,0 +1,608 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Core Primitives & Identity Helpers
+    // ---------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isBootstrapAdmin() {
+      return isSignedIn() && request.auth.token.email == 'zekimuluken@gmail.com';
+    }
+
+    function profileExists() {
+      return exists(/databases/$(database)/documents/profiles/$(request.auth.uid));
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin() || (isSignedIn() && profileExists() && myProfile().isActive == true && myProfile().role == 'ADMIN');
+    }
+
+    function isAccountant() {
+      return isSignedIn() && profileExists() && myProfile().isActive == true && myProfile().role == 'ACCOUNTANT';
+    }
+
+    function isInstructor() {
+      return isSignedIn() && profileExists() && myProfile().isActive == true && myProfile().role == 'INSTRUCTOR';
+    }
+
+    function isGeneralStaff() {
+      return isSignedIn() && profileExists() && myProfile().isActive == true && myProfile().role == 'GENERAL_STAFF';
+    }
+
+    function isStudent() {
+      return isSignedIn() && profileExists() && myProfile().isActive == true && myProfile().role == 'STUDENT';
+    }
+
+    function isOwnStudentRecord(studentId) {
+      return isStudent() && ('linkedStudentId' in myProfile()) && myProfile().linkedStudentId == studentId;
+    }
+
+    function isStaff() {
+      return isAdmin() || isAccountant() || isInstructor() || isGeneralStaff();
+    }
+
+    function isFinanceStaff() {
+      return isAdmin() || isAccountant();
+    }
+
+    function isNonEmptyString(val, maxLen) {
+      return val is string && val.size() >= 1 && val.size() <= maxLen;
+    }
+
+    function isOptionalString(data, key, maxLen) {
+      return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isOptionalNumber(data, key) {
+      return !(key in data) || (data[key] is int || data[key] is float);
+    }
+
+    function isPositiveNumber(val) {
+      return (val is int || val is float) && val > 0;
+    }
+
+    function isNonNegativeNumber(val) {
+      return (val is int || val is float) && val >= 0;
+    }
+
+    // ---------------------------------------------------------
+    // Validation Blueprints
+    // ---------------------------------------------------------
+    function isValidRole(data) {
+      return data.keys().hasAll(['code', 'name', 'description'])
+        && data.keys().hasOnly(['code', 'name', 'description', 'permissions'])
+        && data.code in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT']
+        && isNonEmptyString(data.name, 60)
+        && isNonEmptyString(data.description, 300)
+        && (!('permissions' in data) || (data.permissions is list && data.permissions.size() <= 30));
+    }
+
+    function isValidProfile(data) {
+      return data.keys().hasAll(['uid', 'email', 'fullName', 'role', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'fullName', 'phone', 'role', 'linkedStudentId', 'isActive', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && isNonEmptyString(data.email, 160)
+        && isNonEmptyString(data.fullName, 120)
+        && isOptionalString(data, 'phone', 30)
+        && isOptionalString(data, 'linkedStudentId', 128)
+        && data.role in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT']
+        && data.isActive is bool
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidCourse(data) {
+      return data.keys().hasAll(['code', 'name', 'category', 'durationWeeks', 'feeEtb', 'schedule', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['code', 'name', 'category', 'durationWeeks', 'feeEtb', 'schedule', 'instructorId', 'instructorName', 'description', 'isActive', 'createdAt', 'updatedAt'])
+        && isNonEmptyString(data.code, 24)
+        && isNonEmptyString(data.name, 120)
+        && isNonEmptyString(data.category, 80)
+        && isPositiveNumber(data.durationWeeks)
+        && isPositiveNumber(data.feeEtb)
+        && isNonEmptyString(data.schedule, 120)
+        && isOptionalString(data, 'instructorId', 128)
+        && isOptionalString(data, 'instructorName', 120)
+        && isOptionalString(data, 'description', 500)
+        && data.isActive is bool
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidPaymentPlan(data) {
+      return data.keys().hasAll(['code', 'name', 'installmentCount', 'intervalDays', 'isActive'])
+        && data.keys().hasOnly(['code', 'name', 'installmentCount', 'intervalDays', 'description', 'isActive'])
+        && data.code in ['FULL', 'MONTHLY', 'TWO_MONTH', 'THREE_MONTH', 'SIX_MONTH', 'CUSTOM']
+        && isNonEmptyString(data.name, 80)
+        && isPositiveNumber(data.installmentCount)
+        && isNonNegativeNumber(data.intervalDays)
+        && isOptionalString(data, 'description', 240)
+        && data.isActive is bool;
+    }
+
+    function isValidStudent(data) {
+      return data.keys().hasAll(['studentCode', 'fullName', 'gender', 'phone', 'address', 'courseId', 'courseName', 'enrollmentDate', 'courseFeeEtb', 'paymentPlanCode', 'registrationStatus', 'registeredBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['studentCode', 'fullName', 'gender', 'phone', 'altPhone', 'address', 'photoUrl', 'courseId', 'courseName', 'enrollmentDate', 'courseFeeEtb', 'paymentPlanCode', 'registrationStatus', 'registeredBy', 'registeredByName', 'approvedBy', 'approvedByName', 'approvedAt', 'rejectionReason', 'createdAt', 'updatedAt'])
+        && isNonEmptyString(data.studentCode, 24)
+        && data.studentCode.matches('^ZAC-[0-9]{4}-[0-9]{4}$')
+        && isNonEmptyString(data.fullName, 120)
+        && data.gender in ['Male', 'Female']
+        && isNonEmptyString(data.phone, 30)
+        && isOptionalString(data, 'altPhone', 30)
+        && isNonEmptyString(data.address, 240)
+        && isOptionalString(data, 'photoUrl', 90000)
+        && isNonEmptyString(data.courseId, 128)
+        && isNonEmptyString(data.courseName, 120)
+        && isNonEmptyString(data.enrollmentDate, 20)
+        && isPositiveNumber(data.courseFeeEtb)
+        && data.paymentPlanCode in ['FULL', 'MONTHLY', 'TWO_MONTH', 'THREE_MONTH', 'SIX_MONTH', 'CUSTOM']
+        && data.registrationStatus in ['PENDING', 'APPROVED', 'REJECTED']
+        && isNonEmptyString(data.registeredBy, 128)
+        && isOptionalString(data, 'registeredByName', 120)
+        && isOptionalString(data, 'approvedBy', 128)
+        && isOptionalString(data, 'approvedByName', 120)
+        && isOptionalString(data, 'approvedAt', 40)
+        && isOptionalString(data, 'rejectionReason', 300)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidEnrollment(data) {
+      return data.keys().hasAll(['studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'paymentPlanCode', 'enrollmentDate', 'agreedFeeEtb', 'approvedPaidEtb', 'remainingBalanceEtb', 'status', 'registeredBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'instructorId', 'paymentPlanCode', 'paymentPlanName', 'enrollmentDate', 'agreedFeeEtb', 'approvedPaidEtb', 'remainingBalanceEtb', 'status', 'registeredBy', 'approvedBy', 'createdAt', 'updatedAt'])
+        && isNonEmptyString(data.studentId, 128)
+        && isNonEmptyString(data.studentCode, 24)
+        && isNonEmptyString(data.studentName, 120)
+        && isNonEmptyString(data.courseId, 128)
+        && isNonEmptyString(data.courseName, 120)
+        && isOptionalString(data, 'instructorId', 128)
+        && data.paymentPlanCode in ['FULL', 'MONTHLY', 'TWO_MONTH', 'THREE_MONTH', 'SIX_MONTH', 'CUSTOM']
+        && isOptionalString(data, 'paymentPlanName', 80)
+        && isNonEmptyString(data.enrollmentDate, 20)
+        && isPositiveNumber(data.agreedFeeEtb)
+        && isNonNegativeNumber(data.approvedPaidEtb)
+        && isNonNegativeNumber(data.remainingBalanceEtb)
+        && data.status in ['PENDING', 'ACTIVE', 'COMPLETED', 'REJECTED']
+        && isNonEmptyString(data.registeredBy, 128)
+        && isOptionalString(data, 'approvedBy', 128)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidInstallment(data) {
+      return data.keys().hasAll(['enrollmentId', 'studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'installmentNumber', 'dueDate', 'amountDueEtb', 'amountPaidEtb', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['enrollmentId', 'studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'installmentNumber', 'dueDate', 'amountDueEtb', 'amountPaidEtb', 'status', 'createdAt', 'updatedAt'])
+        && isNonEmptyString(data.enrollmentId, 128)
+        && isNonEmptyString(data.studentId, 128)
+        && isNonEmptyString(data.studentCode, 24)
+        && isNonEmptyString(data.studentName, 120)
+        && isNonEmptyString(data.courseId, 128)
+        && isNonEmptyString(data.courseName, 120)
+        && isPositiveNumber(data.installmentNumber)
+        && isNonEmptyString(data.dueDate, 20)
+        && isPositiveNumber(data.amountDueEtb)
+        && isNonNegativeNumber(data.amountPaidEtb)
+        && data.status in ['UNPAID', 'PARTIAL', 'PAID', 'OVERDUE']
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidPayment(data) {
+      return data.keys().hasAll(['transactionRef', 'enrollmentId', 'studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'amountEtb', 'paymentDate', 'paymentMethod', 'recordedBy', 'recordedByName', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['transactionRef', 'enrollmentId', 'studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'amountEtb', 'paymentDate', 'paymentMethod', 'recordedBy', 'recordedByName', 'status', 'approvedBy', 'approvedByName', 'approvalDate', 'rejectionReason', 'receiptId', 'receiptNumber', 'notes', 'createdAt', 'updatedAt'])
+        && isNonEmptyString(data.transactionRef, 64)
+        && data.transactionRef.matches('^[A-Za-z0-9\\-_]+$')
+        && isNonEmptyString(data.enrollmentId, 128)
+        && isNonEmptyString(data.studentId, 128)
+        && isNonEmptyString(data.studentCode, 24)
+        && isNonEmptyString(data.studentName, 120)
+        && isNonEmptyString(data.courseId, 128)
+        && isNonEmptyString(data.courseName, 120)
+        && isPositiveNumber(data.amountEtb)
+        && isNonEmptyString(data.paymentDate, 20)
+        && data.paymentMethod in ['Cash', 'CBE Birr', 'Telebirr', 'Bank Transfer', 'Check']
+        && isNonEmptyString(data.recordedBy, 128)
+        && isNonEmptyString(data.recordedByName, 120)
+        && data.status in ['PENDING', 'APPROVED', 'REJECTED']
+        && isOptionalString(data, 'approvedBy', 128)
+        && isOptionalString(data, 'approvedByName', 120)
+        && isOptionalString(data, 'approvalDate', 40)
+        && isOptionalString(data, 'rejectionReason', 300)
+        && isOptionalString(data, 'receiptId', 128)
+        && isOptionalString(data, 'receiptNumber', 40)
+        && isOptionalString(data, 'notes', 400)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidPaymentRef(data) {
+      return data.keys().hasAll(['paymentId', 'transactionRef', 'recordedBy', 'createdAt'])
+        && data.keys().hasOnly(['paymentId', 'transactionRef', 'recordedBy', 'createdAt'])
+        && isNonEmptyString(data.paymentId, 128)
+        && isNonEmptyString(data.transactionRef, 64)
+        && isNonEmptyString(data.recordedBy, 128)
+        && isNonEmptyString(data.createdAt, 40);
+    }
+
+    function isValidReceipt(data) {
+      return data.keys().hasAll(['receiptNumber', 'paymentId', 'transactionRef', 'studentId', 'studentCode', 'studentName', 'courseName', 'previousBalanceEtb', 'amountPaidEtb', 'remainingBalanceEtb', 'paymentDate', 'paymentMethod', 'authorizedBy', 'verificationHash', 'issuedAt'])
+        && data.keys().hasOnly(['receiptNumber', 'paymentId', 'transactionRef', 'studentId', 'studentCode', 'studentName', 'studentPhone', 'courseName', 'previousBalanceEtb', 'amountPaidEtb', 'remainingBalanceEtb', 'paymentDate', 'paymentMethod', 'authorizedBy', 'verificationHash', 'issuedAt'])
+        && isNonEmptyString(data.receiptNumber, 40)
+        && isNonEmptyString(data.paymentId, 128)
+        && isNonEmptyString(data.transactionRef, 64)
+        && isNonEmptyString(data.studentId, 128)
+        && isNonEmptyString(data.studentCode, 24)
+        && isNonEmptyString(data.studentName, 120)
+        && isOptionalString(data, 'studentPhone', 30)
+        && isNonEmptyString(data.courseName, 120)
+        && isNonNegativeNumber(data.previousBalanceEtb)
+        && isPositiveNumber(data.amountPaidEtb)
+        && isNonNegativeNumber(data.remainingBalanceEtb)
+        && isNonEmptyString(data.paymentDate, 20)
+        && isNonEmptyString(data.paymentMethod, 40)
+        && isNonEmptyString(data.authorizedBy, 120)
+        && isNonEmptyString(data.verificationHash, 80)
+        && isNonEmptyString(data.issuedAt, 40);
+    }
+
+    function isValidExpenseCategory(data) {
+      return data.keys().hasAll(['name', 'isActive'])
+        && data.keys().hasOnly(['name', 'description', 'isActive'])
+        && isNonEmptyString(data.name, 80)
+        && isOptionalString(data, 'description', 240)
+        && data.isActive is bool;
+    }
+
+    function isValidExpense(data) {
+      return data.keys().hasAll(['categoryId', 'categoryName', 'title', 'amountEtb', 'expenseDate', 'paymentMethod', 'recordedBy', 'recordedByName', 'createdAt'])
+        && data.keys().hasOnly(['categoryId', 'categoryName', 'title', 'amountEtb', 'expenseDate', 'paymentMethod', 'referenceNo', 'recordedBy', 'recordedByName', 'notes', 'createdAt'])
+        && isNonEmptyString(data.categoryId, 128)
+        && isNonEmptyString(data.categoryName, 80)
+        && isNonEmptyString(data.title, 140)
+        && isPositiveNumber(data.amountEtb)
+        && isNonEmptyString(data.expenseDate, 20)
+        && data.paymentMethod in ['Cash', 'CBE Birr', 'Telebirr', 'Bank Transfer', 'Check']
+        && isOptionalString(data, 'referenceNo', 64)
+        && isNonEmptyString(data.recordedBy, 128)
+        && isNonEmptyString(data.recordedByName, 120)
+        && isOptionalString(data, 'notes', 400)
+        && isNonEmptyString(data.createdAt, 40);
+    }
+
+    function isValidAttendance(data) {
+      return data.keys().hasAll(['enrollmentId', 'studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'attendanceDate', 'status', 'recordedBy', 'recordedByName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['enrollmentId', 'studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'attendanceDate', 'status', 'recordedBy', 'recordedByName', 'remarks', 'createdAt', 'updatedAt'])
+        && isNonEmptyString(data.enrollmentId, 128)
+        && isNonEmptyString(data.studentId, 128)
+        && isNonEmptyString(data.studentCode, 24)
+        && isNonEmptyString(data.studentName, 120)
+        && isNonEmptyString(data.courseId, 128)
+        && isNonEmptyString(data.courseName, 120)
+        && isNonEmptyString(data.attendanceDate, 20)
+        && data.status in ['PRESENT', 'ABSENT', 'LATE', 'EXCUSED']
+        && isNonEmptyString(data.recordedBy, 128)
+        && isNonEmptyString(data.recordedByName, 120)
+        && isOptionalString(data, 'remarks', 240)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['type', 'title', 'message', 'targetRole', 'isRead', 'createdAt'])
+        && data.keys().hasOnly(['type', 'title', 'message', 'targetRole', 'studentId', 'studentCode', 'studentName', 'courseName', 'expectedAmountEtb', 'paidAmountEtb', 'remainingBalanceEtb', 'dueDate', 'paymentStatus', 'dedupKey', 'entityType', 'entityId', 'isRead', 'createdAt'])
+        && data.type in ['DEADLINE_APPROACHING', 'OVERDUE_BALANCE', 'PENDING_REGISTRATION', 'PENDING_PAYMENT', 'REJECTED_PAYMENT', 'UPCOMING_PAYMENT', 'PAYMENT_DUE_TODAY', 'PAYMENT_OVERDUE', 'PAYMENT_RECEIVED', 'PAYMENT_APPROVED', 'PAYMENT_REJECTED', 'OUTSTANDING_BALANCE']
+        && isNonEmptyString(data.title, 140)
+        && isNonEmptyString(data.message, 420)
+        && data.targetRole in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT', 'ALL']
+        && isOptionalString(data, 'studentId', 128)
+        && isOptionalString(data, 'studentCode', 24)
+        && isOptionalString(data, 'studentName', 120)
+        && isOptionalString(data, 'courseName', 120)
+        && isOptionalNumber(data, 'expectedAmountEtb')
+        && isOptionalNumber(data, 'paidAmountEtb')
+        && isOptionalNumber(data, 'remainingBalanceEtb')
+        && isOptionalString(data, 'dueDate', 20)
+        && isOptionalString(data, 'paymentStatus', 30)
+        && isOptionalString(data, 'dedupKey', 128)
+        && isOptionalString(data, 'entityType', 40)
+        && isOptionalString(data, 'entityId', 128)
+        && data.isRead is bool
+        && isNonEmptyString(data.createdAt, 40);
+    }
+
+    function isValidNotificationPreference(data) {
+      return data.keys().hasAll(['userId', 'inAppEnabled', 'emailEnabled', 'smsEnabled', 'whatsappEnabled', 'upcomingLeadDays', 'overdueRepeatDays', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'inAppEnabled', 'emailEnabled', 'smsEnabled', 'whatsappEnabled', 'upcomingLeadDays', 'overdueRepeatDays', 'updatedAt'])
+        && isNonEmptyString(data.userId, 128)
+        && data.inAppEnabled is bool
+        && data.emailEnabled is bool
+        && data.smsEnabled is bool
+        && data.whatsappEnabled is bool
+        && isPositiveNumber(data.upcomingLeadDays)
+        && isPositiveNumber(data.overdueRepeatDays)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidSchemaMigration(data) {
+      return data.keys().hasAll(['version', 'name', 'appliedBy', 'appliedByName', 'status', 'appliedAt'])
+        && data.keys().hasOnly(['version', 'name', 'appliedBy', 'appliedByName', 'status', 'appliedAt'])
+        && isNonEmptyString(data.version, 40)
+        && isNonEmptyString(data.name, 160)
+        && isNonEmptyString(data.appliedBy, 128)
+        && isNonEmptyString(data.appliedByName, 120)
+        && data.status in ['APPLIED', 'VERIFIED']
+        && isNonEmptyString(data.appliedAt, 40);
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['actorId', 'actorName', 'actorRole', 'action', 'entityType', 'entityId', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['actorId', 'actorName', 'actorRole', 'action', 'entityType', 'entityId', 'summary', 'createdAt'])
+        && isNonEmptyString(data.actorId, 128)
+        && isNonEmptyString(data.actorName, 120)
+        && data.actorRole in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT']
+        && isNonEmptyString(data.action, 80)
+        && isNonEmptyString(data.entityType, 60)
+        && isNonEmptyString(data.entityId, 128)
+        && isNonEmptyString(data.summary, 400)
+        && isNonEmptyString(data.createdAt, 40);
+    }
+
+    // ---------------------------------------------------------
+    // Connection test document
+    // ---------------------------------------------------------
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // ---------------------------------------------------------
+    // 1. Roles
+    // ---------------------------------------------------------
+    match /roles/{roleId} {
+      allow get: if isSignedIn() && isValidId(roleId) && (isStaff() || isStudent());
+      allow list: if isSignedIn() && (isStaff() || isStudent());
+      allow create, update: if isSignedIn() && isValidId(roleId) && isValidRole(incoming()) && isAdmin();
+      allow delete: if isSignedIn() && isValidId(roleId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 2. Profiles (PII protected: self or Admin; role escalation blocked)
+    // ---------------------------------------------------------
+    match /profiles/{profileId} {
+      allow get: if isSignedIn() && isValidId(profileId) && (profileId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && isValidId(profileId) && isValidProfile(incoming()) && (
+        isAdmin() ||
+        (profileId == request.auth.uid && incoming().uid == request.auth.uid && incoming().email == request.auth.token.email && (isBootstrapAdmin() ? incoming().role == 'ADMIN' : incoming().role == 'INSTRUCTOR') && incoming().isActive == true)
+      );
+      allow update: if isSignedIn() && isValidId(profileId) && isValidProfile(incoming()) && (
+        isAdmin() ||
+        (profileId == request.auth.uid && incoming().uid == existing().uid && incoming().role == existing().role && incoming().isActive == existing().isActive && incoming().createdAt == existing().createdAt && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'updatedAt']))
+      );
+      allow delete: if isSignedIn() && isValidId(profileId) && isAdmin() && profileId != request.auth.uid;
+    }
+
+    // ---------------------------------------------------------
+    // 3. Courses (Admin manages; Staff reads)
+    // ---------------------------------------------------------
+    match /courses/{courseId} {
+      allow get: if isSignedIn() && isValidId(courseId) && (isStaff() || isStudent());
+      allow list: if isSignedIn() && isStaff();
+      allow create: if isSignedIn() && isValidId(courseId) && isValidCourse(incoming()) && isAdmin();
+      allow update: if isSignedIn() && isValidId(courseId) && isValidCourse(incoming()) && incoming().createdAt == existing().createdAt && isAdmin();
+      allow delete: if isSignedIn() && isValidId(courseId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 4. Payment Plans (Finance staff reads; Admin manages; Instructors/General Staff blocked)
+    // ---------------------------------------------------------
+    match /payment_plans/{planId} {
+      allow get: if isSignedIn() && isValidId(planId) && isFinanceStaff();
+      allow list: if isSignedIn() && isFinanceStaff();
+      allow create, update: if isSignedIn() && isValidId(planId) && isValidPaymentPlan(incoming()) && isAdmin();
+      allow delete: if isSignedIn() && isValidId(planId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 5. Students (Accountant creates PENDING; Admin approves/rejects; Student reads own only)
+    // ---------------------------------------------------------
+    match /students/{studentId} {
+      allow get: if isSignedIn() && isValidId(studentId) && (isStaff() || isOwnStudentRecord(studentId));
+      allow list: if isSignedIn() && isStaff();
+      allow create: if isSignedIn() && isValidId(studentId) && isValidStudent(incoming()) && (
+        isAdmin() ||
+        (isAccountant() && incoming().registrationStatus == 'PENDING' && incoming().registeredBy == request.auth.uid)
+      );
+      allow update: if isSignedIn() && isValidId(studentId) && isValidStudent(incoming()) && incoming().createdAt == existing().createdAt && incoming().studentCode == existing().studentCode && (
+        isAdmin() ||
+        (isAccountant() && existing().registrationStatus == 'PENDING' && incoming().registrationStatus == 'PENDING' && incoming().registeredBy == existing().registeredBy && incoming().courseFeeEtb == existing().courseFeeEtb && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'altPhone', 'address', 'photoUrl', 'updatedAt']))
+      );
+      allow delete: if isSignedIn() && isValidId(studentId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 6. Enrollments (Students read strictly own enrollment only)
+    // ---------------------------------------------------------
+    match /enrollments/{enrollmentId} {
+      allow get: if isSignedIn() && isValidId(enrollmentId) && (isStaff() || isOwnStudentRecord(existing().studentId));
+      allow list: if isSignedIn() && (isStaff() || isOwnStudentRecord(existing().studentId));
+      allow create: if isSignedIn() && isValidId(enrollmentId) && isValidEnrollment(incoming()) && (
+        isAdmin() ||
+        (isAccountant() && incoming().status == 'PENDING' && incoming().approvedPaidEtb == 0 && incoming().registeredBy == request.auth.uid)
+      );
+      allow update: if isSignedIn() && isValidId(enrollmentId) && isValidEnrollment(incoming()) && incoming().createdAt == existing().createdAt && isAdmin();
+      allow delete: if isSignedIn() && isValidId(enrollmentId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 7. Payment Installments (Instructors & General Staff blocked; Students own only)
+    // ---------------------------------------------------------
+    match /payment_installments/{installmentId} {
+      allow get: if isSignedIn() && isValidId(installmentId) && (isFinanceStaff() || isOwnStudentRecord(existing().studentId));
+      allow list: if isSignedIn() && (isFinanceStaff() || isOwnStudentRecord(existing().studentId));
+      allow create: if isSignedIn() && isValidId(installmentId) && isValidInstallment(incoming()) && (
+        isAdmin() ||
+        (isAccountant() && incoming().amountPaidEtb == 0 && incoming().status == 'UNPAID')
+      );
+      allow update: if isSignedIn() && isValidId(installmentId) && isValidInstallment(incoming()) && incoming().createdAt == existing().createdAt && (
+        isAdmin() ||
+        (isAccountant() && incoming().amountDueEtb == existing().amountDueEtb && incoming().amountPaidEtb == existing().amountPaidEtb && incoming().status == 'OVERDUE' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+      );
+      allow delete: if isSignedIn() && isValidId(installmentId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 8. Payments (Maker-Checker: Accountant only creates PENDING; Admin approves/rejects; Student own only)
+    // ---------------------------------------------------------
+    match /payments/{paymentId} {
+      allow get: if isSignedIn() && isValidId(paymentId) && (isFinanceStaff() || isOwnStudentRecord(existing().studentId));
+      allow list: if isSignedIn() && (isFinanceStaff() || isOwnStudentRecord(existing().studentId));
+      allow create: if isSignedIn() && isValidId(paymentId) && isValidPayment(incoming()) && (
+        isAdmin() ||
+        (isAccountant() && incoming().status == 'PENDING' && incoming().recordedBy == request.auth.uid)
+      );
+      allow update: if isSignedIn() && isValidId(paymentId) && isValidPayment(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().transactionRef == existing().transactionRef
+        && incoming().recordedBy == existing().recordedBy
+        && incoming().amountEtb == existing().amountEtb
+        && isAdmin()
+        && existing().status == 'PENDING'
+        && incoming().status in ['APPROVED', 'REJECTED']
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'approvedBy', 'approvedByName', 'approvalDate', 'rejectionReason', 'receiptId', 'receiptNumber', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // 9. Payment Reference Uniqueness Lock
+    // ---------------------------------------------------------
+    match /payment_refs/{refId} {
+      allow get: if isSignedIn() && isValidId(refId) && isFinanceStaff();
+      allow list: if false;
+      allow create: if isSignedIn() && isValidId(refId) && isValidPaymentRef(incoming()) && (
+        isAdmin() ||
+        (isAccountant() && incoming().recordedBy == request.auth.uid)
+      );
+      allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // 10. Receipts (Official immutable receipts, Admin-issued only, Student own only)
+    // ---------------------------------------------------------
+    match /receipts/{receiptId} {
+      allow get: if isSignedIn() && isValidId(receiptId) && (isFinanceStaff() || isOwnStudentRecord(existing().studentId));
+      allow list: if isSignedIn() && (isFinanceStaff() || isOwnStudentRecord(existing().studentId));
+      allow create: if isSignedIn() && isValidId(receiptId) && isValidReceipt(incoming()) && isAdmin();
+      allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // 11. Expense Categories (Admin manages; Finance reads)
+    // ---------------------------------------------------------
+    match /expense_categories/{categoryId} {
+      allow get: if isSignedIn() && isValidId(categoryId) && isFinanceStaff();
+      allow list: if isSignedIn() && isFinanceStaff();
+      allow create, update: if isSignedIn() && isValidId(categoryId) && isValidExpenseCategory(incoming()) && isAdmin();
+      allow delete: if isSignedIn() && isValidId(categoryId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 12. Expenses (Admin manages; Finance reads)
+    // ---------------------------------------------------------
+    match /expenses/{expenseId} {
+      allow get: if isSignedIn() && isValidId(expenseId) && isFinanceStaff();
+      allow list: if isSignedIn() && isFinanceStaff();
+      allow create: if isSignedIn() && isValidId(expenseId) && isValidExpense(incoming()) && isAdmin();
+      allow update: if isSignedIn() && isValidId(expenseId) && isValidExpense(incoming()) && incoming().createdAt == existing().createdAt && isAdmin();
+      allow delete: if isSignedIn() && isValidId(expenseId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 13. Attendance (Instructors & Admins manage; Staff reads)
+    // ---------------------------------------------------------
+    match /attendance/{attendanceId} {
+      allow get: if isSignedIn() && isValidId(attendanceId) && isStaff();
+      allow list: if isSignedIn() && isStaff();
+      allow create: if isSignedIn() && isValidId(attendanceId) && isValidAttendance(incoming()) && (
+        isAdmin() ||
+        (isInstructor() && incoming().recordedBy == request.auth.uid)
+      );
+      allow update: if isSignedIn() && isValidId(attendanceId) && isValidAttendance(incoming()) && incoming().createdAt == existing().createdAt && (
+        isAdmin() ||
+        (isInstructor() && incoming().recordedBy == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'remarks', 'recordedBy', 'recordedByName', 'updatedAt']))
+      );
+      allow delete: if isSignedIn() && isValidId(attendanceId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 14. Notifications (Role-scoped & Student-own reads; Deduplicated reminder writes)
+    // ---------------------------------------------------------
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && isValidId(notificationId) && (isStaff() || (isStudent() && ('studentId' in existing()) && isOwnStudentRecord(existing().studentId)));
+      allow list: if isSignedIn() && (isStaff() || (isStudent() && ('studentId' in existing()) && isOwnStudentRecord(existing().studentId)));
+      allow create: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming()) && isFinanceStaff();
+      allow update: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming()) && (
+        isAdmin() ||
+        ((isStaff() || (isStudent() && ('studentId' in existing()) && isOwnStudentRecord(existing().studentId))) && incoming().diff(existing()).affectedKeys().hasOnly(['isRead']))
+      );
+      allow delete: if isSignedIn() && isValidId(notificationId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 15. Notification Preferences (Self or Admin)
+    // ---------------------------------------------------------
+    match /notification_preferences/{prefId} {
+      allow get: if isSignedIn() && isValidId(prefId) && (prefId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && isAdmin();
+      allow create, update: if isSignedIn() && isValidId(prefId) && isValidNotificationPreference(incoming()) && (
+        isAdmin() ||
+        (prefId == request.auth.uid && incoming().userId == request.auth.uid)
+      );
+      allow delete: if isSignedIn() && isValidId(prefId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 16. Schema Migrations (Append-only Admin ledger)
+    // ---------------------------------------------------------
+    match /schema_migrations/{migId} {
+      allow get: if isSignedIn() && isValidId(migId) && isAdmin();
+      allow list: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && isValidId(migId) && isValidSchemaMigration(incoming()) && isAdmin();
+      allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // 17. Audit Logs (Strictly append-only immutable trail; Admin reads)
+    // ---------------------------------------------------------
+    match /audit_logs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && isAdmin();
+      allow list: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming()) && isStaff() && incoming().actorId == request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}

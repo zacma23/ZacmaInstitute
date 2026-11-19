@@ -1,0 +1,350 @@
+{
+  "entities": {
+    "Role": {
+      "title": "Role",
+      "description": "Canonical staff and student role definition in ZACMA portal.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "enum": ["ADMIN", "ACCOUNTANT", "INSTRUCTOR", "GENERAL_STAFF", "STUDENT"], "maxLength": 20 },
+        "name": { "type": "string", "maxLength": 60 },
+        "description": { "type": "string", "maxLength": 300 },
+        "permissions": { "type": "array", "description": "Bounded list of role capabilities." }
+      },
+      "required": ["code", "name", "description"]
+    },
+    "Profile": {
+      "title": "Profile",
+      "description": "Authenticated user profile and authoritative RBAC role assignment.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "fullName": { "type": "string", "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "role": { "type": "string", "enum": ["ADMIN", "ACCOUNTANT", "INSTRUCTOR", "GENERAL_STAFF", "STUDENT"] },
+        "linkedStudentId": { "type": "string", "maxLength": 128 },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "fullName", "role", "isActive", "createdAt", "updatedAt"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "ZACMA training course with fee, duration, schedule, and assigned instructor.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 24, "pattern": "^[A-Z0-9\\-]+$" },
+        "name": { "type": "string", "maxLength": 120 },
+        "category": { "type": "string", "maxLength": 80 },
+        "durationWeeks": { "type": "number" },
+        "feeEtb": { "type": "number" },
+        "schedule": { "type": "string", "maxLength": 120 },
+        "instructorId": { "type": "string", "maxLength": 128 },
+        "instructorName": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "name", "category", "durationWeeks", "feeEtb", "schedule", "isActive", "createdAt", "updatedAt"]
+    },
+    "PaymentPlan": {
+      "title": "PaymentPlan",
+      "description": "Standard or custom installment payment plan template.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "enum": ["FULL", "MONTHLY", "TWO_MONTH", "THREE_MONTH", "SIX_MONTH", "CUSTOM"], "maxLength": 30 },
+        "name": { "type": "string", "maxLength": 80 },
+        "installmentCount": { "type": "number" },
+        "intervalDays": { "type": "number" },
+        "description": { "type": "string", "maxLength": 240 },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["code", "name", "installmentCount", "intervalDays", "isActive"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Registered student profile with institutional ID and admin approval status.",
+      "type": "object",
+      "properties": {
+        "studentCode": { "type": "string", "maxLength": 24, "pattern": "^ZAC-[0-9]{4}-[0-9]{4}$" },
+        "fullName": { "type": "string", "maxLength": 120 },
+        "gender": { "type": "string", "enum": ["Male", "Female"] },
+        "phone": { "type": "string", "maxLength": 30 },
+        "altPhone": { "type": "string", "maxLength": 30 },
+        "address": { "type": "string", "maxLength": 240 },
+        "photoUrl": { "type": "string", "maxLength": 90000 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "enrollmentDate": { "type": "string", "maxLength": 20 },
+        "courseFeeEtb": { "type": "number" },
+        "paymentPlanCode": { "type": "string", "maxLength": 30 },
+        "registrationStatus": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
+        "registeredBy": { "type": "string", "maxLength": 128 },
+        "registeredByName": { "type": "string", "maxLength": 120 },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "approvedByName": { "type": "string", "maxLength": 120 },
+        "approvedAt": { "type": "string", "maxLength": 40 },
+        "rejectionReason": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentCode", "fullName", "gender", "phone", "address", "courseId", "courseName", "enrollmentDate", "courseFeeEtb", "paymentPlanCode", "registrationStatus", "registeredBy", "createdAt", "updatedAt"]
+    },
+    "Enrollment": {
+      "title": "Enrollment",
+      "description": "Student enrollment linking student, course, fee obligation, and payment plan.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentCode": { "type": "string", "maxLength": 24 },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "instructorId": { "type": "string", "maxLength": 128 },
+        "paymentPlanCode": { "type": "string", "maxLength": 30 },
+        "paymentPlanName": { "type": "string", "maxLength": 80 },
+        "enrollmentDate": { "type": "string", "maxLength": 20 },
+        "agreedFeeEtb": { "type": "number" },
+        "approvedPaidEtb": { "type": "number" },
+        "remainingBalanceEtb": { "type": "number" },
+        "status": { "type": "string", "enum": ["PENDING", "ACTIVE", "COMPLETED", "REJECTED"] },
+        "registeredBy": { "type": "string", "maxLength": 128 },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "studentCode", "studentName", "courseId", "courseName", "paymentPlanCode", "enrollmentDate", "agreedFeeEtb", "approvedPaidEtb", "remainingBalanceEtb", "status", "registeredBy", "createdAt", "updatedAt"]
+    },
+    "PaymentInstallment": {
+      "title": "PaymentInstallment",
+      "description": "Scheduled fee installment row for an enrollment.",
+      "type": "object",
+      "properties": {
+        "enrollmentId": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentCode": { "type": "string", "maxLength": 24 },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "installmentNumber": { "type": "number" },
+        "dueDate": { "type": "string", "maxLength": 20 },
+        "amountDueEtb": { "type": "number" },
+        "amountPaidEtb": { "type": "number" },
+        "status": { "type": "string", "enum": ["UNPAID", "PARTIAL", "PAID", "OVERDUE"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["enrollmentId", "studentId", "studentCode", "studentName", "courseId", "courseName", "installmentNumber", "dueDate", "amountDueEtb", "amountPaidEtb", "status", "createdAt", "updatedAt"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Student fee payment submission requiring admin approval before affecting balances.",
+      "type": "object",
+      "properties": {
+        "transactionRef": { "type": "string", "maxLength": 64, "pattern": "^[A-Za-z0-9\\-_]+$" },
+        "enrollmentId": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentCode": { "type": "string", "maxLength": 24 },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "amountEtb": { "type": "number" },
+        "paymentDate": { "type": "string", "maxLength": 20 },
+        "paymentMethod": { "type": "string", "enum": ["Cash", "CBE Birr", "Telebirr", "Bank Transfer", "Check"] },
+        "recordedBy": { "type": "string", "maxLength": 128 },
+        "recordedByName": { "type": "string", "maxLength": 120 },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "approvedByName": { "type": "string", "maxLength": 120 },
+        "approvalDate": { "type": "string", "maxLength": 40 },
+        "rejectionReason": { "type": "string", "maxLength": 300 },
+        "receiptId": { "type": "string", "maxLength": 128 },
+        "receiptNumber": { "type": "string", "maxLength": 40 },
+        "notes": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["transactionRef", "enrollmentId", "studentId", "studentCode", "studentName", "courseId", "courseName", "amountEtb", "paymentDate", "paymentMethod", "recordedBy", "recordedByName", "status", "createdAt", "updatedAt"]
+    },
+    "PaymentRef": {
+      "title": "PaymentRef",
+      "description": "Unique index lock preventing duplicate transaction references.",
+      "type": "object",
+      "properties": {
+        "paymentId": { "type": "string", "maxLength": 128 },
+        "transactionRef": { "type": "string", "maxLength": 64 },
+        "recordedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["paymentId", "transactionRef", "recordedBy", "createdAt"]
+    },
+    "Receipt": {
+      "title": "Receipt",
+      "description": "Official immutable payment receipt generated strictly for approved payments.",
+      "type": "object",
+      "properties": {
+        "receiptNumber": { "type": "string", "maxLength": 40 },
+        "paymentId": { "type": "string", "maxLength": 128 },
+        "transactionRef": { "type": "string", "maxLength": 64 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentCode": { "type": "string", "maxLength": 24 },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "studentPhone": { "type": "string", "maxLength": 30 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "previousBalanceEtb": { "type": "number" },
+        "amountPaidEtb": { "type": "number" },
+        "remainingBalanceEtb": { "type": "number" },
+        "paymentDate": { "type": "string", "maxLength": 20 },
+        "paymentMethod": { "type": "string", "maxLength": 40 },
+        "authorizedBy": { "type": "string", "maxLength": 120 },
+        "verificationHash": { "type": "string", "maxLength": 80 },
+        "issuedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["receiptNumber", "paymentId", "transactionRef", "studentId", "studentCode", "studentName", "courseName", "previousBalanceEtb", "amountPaidEtb", "remainingBalanceEtb", "paymentDate", "paymentMethod", "authorizedBy", "verificationHash", "issuedAt"]
+    },
+    "ExpenseCategory": {
+      "title": "ExpenseCategory",
+      "description": "Accounting expense category.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 240 },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["name", "isActive"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Institutional expense entry in ETB.",
+      "type": "object",
+      "properties": {
+        "categoryId": { "type": "string", "maxLength": 128 },
+        "categoryName": { "type": "string", "maxLength": 80 },
+        "title": { "type": "string", "maxLength": 140 },
+        "amountEtb": { "type": "number" },
+        "expenseDate": { "type": "string", "maxLength": 20 },
+        "paymentMethod": { "type": "string", "enum": ["Cash", "CBE Birr", "Telebirr", "Bank Transfer", "Check"] },
+        "referenceNo": { "type": "string", "maxLength": 64 },
+        "recordedBy": { "type": "string", "maxLength": 128 },
+        "recordedByName": { "type": "string", "maxLength": 120 },
+        "notes": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["categoryId", "categoryName", "title", "amountEtb", "expenseDate", "paymentMethod", "recordedBy", "recordedByName", "createdAt"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Daily student attendance record recorded by instructors or admins.",
+      "type": "object",
+      "properties": {
+        "enrollmentId": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentCode": { "type": "string", "maxLength": 24 },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "attendanceDate": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["PRESENT", "ABSENT", "LATE", "EXCUSED"] },
+        "recordedBy": { "type": "string", "maxLength": 128 },
+        "recordedByName": { "type": "string", "maxLength": 120 },
+        "remarks": { "type": "string", "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["enrollmentId", "studentId", "studentCode", "studentName", "courseId", "courseName", "attendanceDate", "status", "recordedBy", "recordedByName", "createdAt", "updatedAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Role-targeted or student-specific alert for deadlines, overdue balances, and payment events.",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["DEADLINE_APPROACHING", "OVERDUE_BALANCE", "PENDING_REGISTRATION", "PENDING_PAYMENT", "REJECTED_PAYMENT", "UPCOMING_PAYMENT", "PAYMENT_DUE_TODAY", "PAYMENT_OVERDUE", "PAYMENT_RECEIVED", "PAYMENT_APPROVED", "PAYMENT_REJECTED", "OUTSTANDING_BALANCE"] },
+        "title": { "type": "string", "maxLength": 140 },
+        "message": { "type": "string", "maxLength": 420 },
+        "targetRole": { "type": "string", "enum": ["ADMIN", "ACCOUNTANT", "INSTRUCTOR", "GENERAL_STAFF", "STUDENT", "ALL"] },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentCode": { "type": "string", "maxLength": 24 },
+        "studentName": { "type": "string", "maxLength": 120 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "expectedAmountEtb": { "type": "number" },
+        "paidAmountEtb": { "type": "number" },
+        "remainingBalanceEtb": { "type": "number" },
+        "dueDate": { "type": "string", "maxLength": 20 },
+        "paymentStatus": { "type": "string", "maxLength": 30 },
+        "dedupKey": { "type": "string", "maxLength": 128 },
+        "entityType": { "type": "string", "maxLength": 40 },
+        "entityId": { "type": "string", "maxLength": 128 },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "title", "message", "targetRole", "isRead", "createdAt"]
+    },
+    "NotificationPreference": {
+      "title": "NotificationPreference",
+      "description": "Per-user delivery preferences for In-App, Email, SMS, and WhatsApp reminders.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "inAppEnabled": { "type": "boolean" },
+        "emailEnabled": { "type": "boolean" },
+        "smsEnabled": { "type": "boolean" },
+        "whatsappEnabled": { "type": "boolean" },
+        "upcomingLeadDays": { "type": "number" },
+        "overdueRepeatDays": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "inAppEnabled", "emailEnabled", "smsEnabled", "whatsappEnabled", "upcomingLeadDays", "overdueRepeatDays", "updatedAt"]
+    },
+    "SchemaMigration": {
+      "title": "SchemaMigration",
+      "description": "Versioned additive migration ledger recording completed schema versions.",
+      "type": "object",
+      "properties": {
+        "version": { "type": "string", "maxLength": 40 },
+        "name": { "type": "string", "maxLength": 160 },
+        "appliedBy": { "type": "string", "maxLength": 128 },
+        "appliedByName": { "type": "string", "maxLength": 120 },
+        "status": { "type": "string", "enum": ["APPLIED", "VERIFIED"] },
+        "appliedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["version", "name", "appliedBy", "appliedByName", "status", "appliedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Append-only immutable audit trail for financial and governance actions.",
+      "type": "object",
+      "properties": {
+        "actorId": { "type": "string", "maxLength": 128 },
+        "actorName": { "type": "string", "maxLength": 120 },
+        "actorRole": { "type": "string", "enum": ["ADMIN", "ACCOUNTANT", "INSTRUCTOR", "GENERAL_STAFF", "STUDENT"] },
+        "action": { "type": "string", "maxLength": 80 },
+        "entityType": { "type": "string", "maxLength": 60 },
+        "entityId": { "type": "string", "maxLength": 128 },
+        "summary": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorId", "actorName", "actorRole", "action", "entityType", "entityId", "summary", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/roles/{roleId}": { "schema": { "$ref": "#/entities/Role" }, "description": "Canonical role definitions." },
+    "/profiles/{profileId}": { "schema": { "$ref": "#/entities/Profile" }, "description": "User profiles keyed by UID." },
+    "/courses/{courseId}": { "schema": { "$ref": "#/entities/Course" }, "description": "Training institute courses." },
+    "/payment_plans/{planId}": { "schema": { "$ref": "#/entities/PaymentPlan" }, "description": "Fee installment templates." },
+    "/students/{studentId}": { "schema": { "$ref": "#/entities/Student" }, "description": "Registered student profiles." },
+    "/enrollments/{enrollmentId}": { "schema": { "$ref": "#/entities/Enrollment" }, "description": "Student-course enrollments and live balance tracking." },
+    "/payment_installments/{installmentId}": { "schema": { "$ref": "#/entities/PaymentInstallment" }, "description": "Scheduled fee installments." },
+    "/payments/{paymentId}": { "schema": { "$ref": "#/entities/Payment" }, "description": "Student fee payment submissions and approval state." },
+    "/payment_refs/{refId}": { "schema": { "$ref": "#/entities/PaymentRef" }, "description": "Unique reference locks preventing duplicate payment references." },
+    "/receipts/{receiptId}": { "schema": { "$ref": "#/entities/Receipt" }, "description": "Immutable official receipts for approved payments." },
+    "/expense_categories/{categoryId}": { "schema": { "$ref": "#/entities/ExpenseCategory" }, "description": "Expense categories." },
+    "/expenses/{expenseId}": { "schema": { "$ref": "#/entities/Expense" }, "description": "Operational expense ledger." },
+    "/attendance/{attendanceId}": { "schema": { "$ref": "#/entities/Attendance" }, "description": "Daily student attendance records." },
+    "/notifications/{notificationId}": { "schema": { "$ref": "#/entities/Notification" }, "description": "Dashboard and student payment reminder notifications." },
+    "/notification_preferences/{prefId}": { "schema": { "$ref": "#/entities/NotificationPreference" }, "description": "User notification delivery preferences." },
+    "/schema_migrations/{migId}": { "schema": { "$ref": "#/entities/SchemaMigration" }, "description": "Versioned additive migration ledger." },
+    "/audit_logs/{logId}": { "schema": { "$ref": "#/entities/AuditLog" }, "description": "Append-only immutable audit logs." }
+  }
+}
