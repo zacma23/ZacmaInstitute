@@ -1,7 +1,21 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
+import {
+  getRedirectResult,
+  onAuthStateChanged,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+  User,
+} from 'firebase/auth';
 import { collection, doc, getDoc, onSnapshot, query, setDoc, where } from 'firebase/firestore';
-import { auth, db, googleAuthProvider, handleFirestoreError, OperationType } from '../lib/firebase';
+import {
+  activeFirebaseProjectId,
+  auth,
+  db,
+  googleAuthProvider,
+  handleFirestoreError,
+  OperationType,
+} from '../lib/firebase';
 import { ensureSeededDatabase } from '../lib/seedData';
 import { evaluatePaymentReminders, ReminderEvaluationResult } from '../lib/zacmaService';
 import {
@@ -121,6 +135,19 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
+    // Capture any redirect sign-in errors (e.g., mobile popup fallback)
+    getRedirectResult(auth).catch((err) => {
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/unauthorized-domain') {
+        const host = window.location.hostname;
+        setAuthError(
+          `UNAUTHORIZED_DOMAIN|${host}|${activeFirebaseProjectId}`
+        );
+      } else if (err instanceof Error && err.message) {
+        setAuthError(err.message);
+      }
+    });
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       setAuthError(null);
@@ -558,7 +585,36 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     try {
       await signInWithPopup(auth, googleAuthProvider);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Sign-in failed. Please allow popups and try again.';
+      const code = (err as { code?: string })?.code || '';
+      const rawMsg = err instanceof Error ? err.message : String(err);
+
+      if (code === 'auth/popup-blocked') {
+        try {
+          await signInWithRedirect(auth, googleAuthProvider);
+          return;
+        } catch (redirectErr) {
+          const rCode = (redirectErr as { code?: string })?.code || '';
+          if (rCode === 'auth/unauthorized-domain') {
+            setAuthError(`UNAUTHORIZED_DOMAIN|${window.location.hostname}|${activeFirebaseProjectId}`);
+            return;
+          }
+        }
+      }
+
+      if (code === 'auth/unauthorized-domain' || rawMsg.includes('auth/unauthorized-domain')) {
+        const host = window.location.hostname;
+        setAuthError(`UNAUTHORIZED_DOMAIN|${host}|${activeFirebaseProjectId}`);
+        pushToast(
+          'error',
+          `Domain "${host}" is not authorized in Firebase project "${activeFirebaseProjectId}".`
+        );
+        return;
+      }
+
+      const msg =
+        code === 'auth/popup-closed-by-user'
+          ? 'Sign-in popup was closed before completing authentication.'
+          : rawMsg || 'Sign-in failed. Please allow popups and try again.';
       setAuthError(msg);
       pushToast('error', msg);
     }

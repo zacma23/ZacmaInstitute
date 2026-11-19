@@ -95,6 +95,12 @@ git push -u origin main
 
 ## Troubleshooting
 
+- **`Firebase: Error (auth/unauthorized-domain)` on Vercel**:
+  1. **Check the active Firebase Project ID**: By default, the app uses `firebase-applet-config.json` (project ID `gen-lang-client-0608981624`). If you added your Vercel domain in a *different* Firebase project you created yourself, either:
+     - Set `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`, and `VITE_FIREBASE_DATABASE_ID` in **Vercel Project Settings -> Environment Variables** and redeploy, **OR**
+     - Add the exact Vercel hostname in Firebase Console under project `gen-lang-client-0608981624` -> **Authentication -> Settings -> Authorized domains**.
+  2. **Check Production vs. Preview URL**: Vercel generates unique preview URLs (like `zacma-git-main-xxx.vercel.app`) that are separate from your main domain (`zacma.vercel.app`). Firebase does not allow wildcard `*.vercel.app` entries; open your main production domain or add the exact hostname shown on the Login error box (without `https://` or trailing `/`).
+  3. **Wait 1–2 minutes & hard-refresh**: Firebase Auth domain list changes can take ~60 seconds to propagate.
 - **AI Assistant shows "Unavailable"**: Verify `GEMINI_API_KEY` is set in your server environment (`.env` locally or Vercel Environment Variables in production). The rest of the ZACMA portal operates normally even without an AI key.
 - **External Email/SMS/WhatsApp not sending**: External channels require valid provider credentials (`SMTP_*`, `TWILIO_*`, `WHATSAPP_*`) and a live provider SDK call; the portal never reports fake delivery success when unconfigured.
 - **Student cannot see their balance**: Confirm the user's profile role is set to `STUDENT` and linked to their ZACMA Student ID in **Staff & Roles**.

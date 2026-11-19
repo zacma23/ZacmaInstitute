@@ -1,9 +1,22 @@
-import React from 'react';
-import { BookOpen, Calculator, CheckSquare, Lock, ShieldCheck } from 'lucide-react';
+import React, { useState } from 'react';
+import { BookOpen, Calculator, Check, CheckSquare, Copy, Lock, ShieldCheck } from 'lucide-react';
 import { usePortal } from '../context/PortalContext';
 
 export function LoginScreen() {
   const { signInWithGoogle, authLoading, authError } = usePortal();
+  const [copiedHost, setCopiedHost] = useState(false);
+
+  const isUnauthorizedDomain = Boolean(authError?.startsWith('UNAUTHORIZED_DOMAIN|'));
+  const [, unauthorizedHost = '', unauthorizedProjectId = ''] = isUnauthorizedDomain
+    ? (authError || '').split('|')
+    : [];
+
+  const handleCopyHost = () => {
+    if (!unauthorizedHost) return;
+    void navigator.clipboard?.writeText(unauthorizedHost);
+    setCopiedHost(true);
+    window.setTimeout(() => setCopiedHost(false), 2000);
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 grid grid-cols-1 lg:grid-cols-12">
@@ -87,9 +100,54 @@ export function LoginScreen() {
           </div>
 
           {authError && (
-            <div className="mb-5 p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
-              {authError}
-            </div>
+            isUnauthorizedDomain ? (
+              <div className="mb-5 p-4 rounded-lg bg-red-50 border border-red-200 text-xs text-red-900 space-y-2.5">
+                <p className="font-bold text-red-800">
+                  Firebase Auth: Unauthorized Domain ({unauthorizedHost})
+                </p>
+                <p className="text-red-800 leading-relaxed">
+                  Google Sign-In rejected this hostname because it is not listed under{' '}
+                  <strong>Authentication &rarr; Settings &rarr; Authorized domains</strong> in the{' '}
+                  <strong>active</strong> Firebase project:
+                </p>
+                <div className="bg-white border border-red-200 rounded-md p-2.5 space-y-1.5 font-mono text-[11px] text-slate-800">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate">
+                      Domain: <strong>{unauthorizedHost}</strong>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyHost}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-sans font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded shrink-0"
+                    >
+                      {copiedHost ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
+                      {copiedHost ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="truncate">
+                    Active Firebase Project: <strong>{unauthorizedProjectId}</strong>
+                  </p>
+                </div>
+                <ul className="list-disc pl-4 space-y-1 text-[11px] text-red-800 leading-snug">
+                  <li>
+                    Make sure you added the domain in project <strong>{unauthorizedProjectId}</strong>{' '}
+                    (not a different Firebase project), without <code>https://</code> or trailing slashes.
+                  </li>
+                  <li>
+                    Vercel Preview URLs (e.g. <code>*-git-*.vercel.app</code>) differ from your main production domain — open your main production domain or add this exact hostname.
+                  </li>
+                  <li>
+                    To use your own Firebase project on Vercel instead, set{' '}
+                    <code>VITE_FIREBASE_API_KEY</code>, <code>VITE_FIREBASE_AUTH_DOMAIN</code>,{' '}
+                    <code>VITE_FIREBASE_PROJECT_ID</code>, and <code>VITE_FIREBASE_APP_ID</code> in Vercel Environment Variables and redeploy.
+                  </li>
+                </ul>
+              </div>
+            ) : (
+              <div className="mb-5 p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
+                {authError}
+              </div>
+            )
           )}
 
           <button
