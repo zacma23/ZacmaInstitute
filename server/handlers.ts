@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { GoogleGenAI } from '@google/genai';
+import { Content, GenerateContentResponse, GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { buildKnowledgeContextForRole } from '../src/lib/knowledgeBase.ts';
 import type { RoleCode } from '../src/types/zacma.ts';
 
@@ -13,13 +13,31 @@ export function getAiModelName(): string {
   return process.env.GEMINI_MODEL || process.env.AI_MODEL || 'gemini-4-hydrogen';
 }
 
+export function resolveGeminiApiKey(): string | null {
+  const candidates = [
+    process.env.GEMINI_API_KEY,
+    process.env.GOOGLE_API_KEY,
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+    process.env.GOOGLE_GEMINI_API_KEY,
+    process.env.GEMINI_KEY,
+    process.env.API_KEY,
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const cleaned = raw.trim().replace(/^['"]|['"]$/g, '').trim();
+    if (!cleaned || cleaned === 'MY_GEMINI_API_KEY' || cleaned.length < 10) continue;
+    return cleaned;
+  }
+  return null;
+}
+
 export function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey.trim().length < 10) {
+  const apiKey = resolveGeminiApiKey();
+  if (!apiKey) {
     return null;
   }
   return new GoogleGenAI({
-    apiKey: apiKey.trim(),
+    apiKey,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -133,26 +151,70 @@ export function handleHealth(): HandlerResult {
   };
 }
 
-export async function handleAiChat(payload: {
+export type AiChatMode = 'standard' | 'fast';
+
+export interface AiChatPayload {
   message?: string;
-  history?: Array<{ role: 'user' | 'assistant'; text: string }>;
+  history?: Array<{ role: 'user' | 'assistant' | 'model'; text: string }>;
   role?: RoleCode;
   userName?: string;
+  mode?: AiChatMode;
   context?: Record<string, unknown>;
-}): Promise<HandlerResult> {
+}
+
+interface PreparedAiChat {
+  ai: GoogleGenAI;
+  trimmedMessage: string;
+  systemInstruction: string;
+  history: Content[];
+  candidateModels: string[];
+}
+
+function normalizeChatHistory(
+  rawHistory?: Array<{ role: 'user' | 'assistant' | 'model'; text: string }>
+): Content[] {
+  if (!Array.isArray(rawHistory) || rawHistory.length === 0) return [];
+  const normalized: Content[] = [];
+
+  for (const item of rawHistory.slice(-20)) {
+    const text = typeof item?.text === 'string' ? item.text.trim().slice(0, 2000) : '';
+    if (!text) continue;
+    const role: 'user' | 'model' = item.role === 'user' ? 'user' : 'model';
+
+    // Ensure history begins with a user turn
+    if (normalized.length === 0 && role !== 'user') continue;
+
+    // Merge consecutive same-role messages so multi-turn alternation stays valid
+    const prev = normalized[normalized.length - 1];
+    if (prev && prev.role === role && prev.parts && prev.parts[0] && 'text' in prev.parts[0]) {
+      prev.parts[0].text = `${prev.parts[0].text}\n\n${text}`;
+    } else {
+      normalized.push({ role, parts: [{ text }] });
+    }
+  }
+
+  return normalized;
+}
+
+function prepareAiChat(
+  payload: AiChatPayload
+): { ok: true; data: PreparedAiChat } | { ok: false; error: HandlerResult } {
   const ai = getGeminiClient();
   if (!ai) {
     return {
-      status: 503,
-      body: {
-        code: 'AI_NOT_CONFIGURED',
-        error:
-          'ZACMA AI Assistant is not configured on this server (GEMINI_API_KEY missing). All other portal modules continue operating normally.',
+      ok: false,
+      error: {
+        status: 503,
+        body: {
+          code: 'AI_NOT_CONFIGURED',
+          error:
+            'ZACMA AI Assistant is not configured on this server (GEMINI_API_KEY missing). In Vercel, open Project Settings -> Environment Variables, add GEMINI_API_KEY (select Production, Preview & Development), and click Redeploy. All other portal modules continue operating normally.',
+        },
       },
     };
   }
 
-  const { message, history, role, userName, context } = payload || {};
+  const { message, history, role, userName, mode, context } = payload || {};
   const allowedRoles: RoleCode[] = [
     'ADMIN',
     'ACCOUNTANT',
@@ -163,14 +225,20 @@ export async function handleAiChat(payload: {
 
   if (!role || !allowedRoles.includes(role)) {
     return {
-      status: 401,
-      body: { error: 'Authenticated user role is required.' },
+      ok: false,
+      error: {
+        status: 401,
+        body: { error: 'Authenticated user role is required.' },
+      },
     };
   }
   if (!message || typeof message !== 'string' || !message.trim()) {
     return {
-      status: 400,
-      body: { error: 'Message text is required.' },
+      ok: false,
+      error: {
+        status: 400,
+        body: { error: 'Message text is required.' },
+      },
     };
   }
 
@@ -189,7 +257,7 @@ export async function handleAiChat(payload: {
       'User is a STUDENT. STRICT SECURITY RULE: Only discuss THIS student’s own payment schedule, own outstanding ETB balance, own payment status, and how to print their own approved receipts. NEVER reference or speculate about any other student.',
   };
 
-  const systemInstruction = `You are "ZACMA AI ASSISTANT", the official help and analytics assistant for ZACMA Technology & Training Institute's Student Fee Management & Accounting Portal.
+  const systemInstruction = `You are "ZACMA AI ASSISTANT", the official multi-turn help and analytics chatbot for ZACMA Technology & Training Institute's Student Fee Management & Accounting Portal.
 
 AUTHENTICATED USER:
 - Name: ${String(userName || 'Authorized User').slice(0, 80)}
@@ -202,7 +270,7 @@ ABSOLUTE SECURITY & ACCOUNTING RULES (NEVER VIOLATE):
 3. NEVER invent payment figures, receipt numbers, student IDs, or balances. If a specific figure is not in the Authorized Live Context below, clearly state that it is not available in your current view.
 4. NEVER claim to approve payments, modify accounting records, create users, or change permissions. You are strictly read-only; guide the authorized user on where to click and confirm manually.
 5. NEVER reveal passwords, API keys, service-role secrets, or private records belonging to another student.
-6. Keep responses concise, structured, accurate, and directly actionable inside the ZACMA portal.
+6. Maintain continuity across the multi-turn conversation. Keep responses concise, structured with clean bullet points when helpful, accurate, and directly actionable inside the ZACMA portal.
 
 OFFICIAL ZACMA SYSTEM KNOWLEDGE BASE:
 ${knowledgeText}
@@ -210,34 +278,87 @@ ${knowledgeText}
 AUTHORIZED LIVE CONTEXT FOR THIS ${role} SESSION (JSON):
 ${JSON.stringify(context || {}, null, 2).slice(0, 12000)}`;
 
-  const conversationLines = (Array.isArray(history) ? history.slice(-6) : [])
-    .map((h) => `${h.role === 'user' ? 'User' : 'ZACMA AI Assistant'}: ${String(h.text).slice(0, 600)}`)
-    .join('\n');
-
-  const promptText = conversationLines
-    ? `Recent conversation:\n${conversationLines}\n\nCurrent user question:\n${message.trim().slice(0, 1500)}`
-    : message.trim().slice(0, 1500);
-
-  const primaryModel = getAiModelName();
+  const primaryStandardModel = getAiModelName();
   const candidateModels =
-    primaryModel === 'gemini-flash-latest'
-      ? [primaryModel]
-      : [primaryModel, 'gemini-flash-latest'];
+    mode === 'fast'
+      ? Array.from(
+          new Set(['gemini-3.1-flash-lite', primaryStandardModel, 'gemini-flash-latest', 'gemini-2.5-flash'])
+        )
+      : Array.from(new Set([primaryStandardModel, 'gemini-flash-latest', 'gemini-2.5-flash']));
 
+  return {
+    ok: true,
+    data: {
+      ai,
+      trimmedMessage: message.trim().slice(0, 2000),
+      systemInstruction,
+      history: normalizeChatHistory(history),
+      candidateModels,
+    },
+  };
+}
+
+function isModelUnavailableError(errText: string): boolean {
+  const lowerErr = errText.toLowerCase();
+  return (
+    errText.includes('404') ||
+    errText.includes('NOT_FOUND') ||
+    lowerErr.includes('not found') ||
+    lowerErr.includes('not supported') ||
+    lowerErr.includes('unknown model') ||
+    lowerErr.includes('invalid model')
+  );
+}
+
+function isTransientError(errText: string): boolean {
+  return errText.includes('503') || errText.includes('UNAVAILABLE') || errText.includes('429');
+}
+
+function formatAiUpstreamError(rawErr: string): string {
+  try {
+    const parsed = JSON.parse(rawErr) as { error?: { message?: string } };
+    if (parsed?.error?.message) {
+      try {
+        const inner = JSON.parse(parsed.error.message) as { error?: { message?: string } };
+        if (inner?.error?.message) return inner.error.message;
+      } catch {
+        return parsed.error.message;
+      }
+    }
+  } catch {
+    // Keep original message if not JSON
+  }
+  return rawErr;
+}
+
+export async function handleAiChat(payload: AiChatPayload): Promise<HandlerResult> {
+  const prepared = prepareAiChat(payload);
+  if (!prepared.ok) {
+    return prepared.error;
+  }
+
+  const { ai, trimmedMessage, systemInstruction, history, candidateModels } = prepared.data;
   let lastError: unknown = null;
 
-  for (const activeModel of candidateModels) {
-    let modelNotFound = false;
+  for (let modelIdx = 0; modelIdx < candidateModels.length; modelIdx++) {
+    const activeModel = candidateModels[modelIdx];
+    const hasNextModel = modelIdx < candidateModels.length - 1;
+    let shouldTryFallbackModel = false;
 
-    // One graceful retry on transient 503/429 overload, then propagate real error honestly
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const response = await ai.models.generateContent({
+        const chat = ai.chats.create({
           model: activeModel,
-          contents: promptText,
+          history,
           config: {
             systemInstruction,
+            ...(activeModel.startsWith('gemini-4-')
+              ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+              : {}),
           },
+        });
+        const response: GenerateContentResponse = await chat.sendMessage({
+          message: trimmedMessage,
         });
         const reply = response.text?.trim();
         if (!reply) {
@@ -257,25 +378,25 @@ ${JSON.stringify(context || {}, null, 2).slice(0, 12000)}`;
       } catch (error) {
         lastError = error;
         const errText = error instanceof Error ? error.message : String(error);
-        const isNotFound =
-          errText.includes('404') ||
-          errText.includes('NOT_FOUND') ||
-          errText.toLowerCase().includes('not found');
-        if (isNotFound) {
-          modelNotFound = true;
+        if (isModelUnavailableError(errText)) {
+          shouldTryFallbackModel = true;
           break;
         }
-        const isTransient =
-          errText.includes('503') || errText.includes('UNAVAILABLE') || errText.includes('429');
-        if (attempt === 0 && isTransient) {
-          await new Promise((r) => setTimeout(r, 900));
-          continue;
+        if (isTransientError(errText)) {
+          if (hasNextModel) {
+            shouldTryFallbackModel = true;
+            break;
+          }
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 700));
+            continue;
+          }
         }
         break;
       }
     }
 
-    if (!modelNotFound) {
+    if (!shouldTryFallbackModel) {
       break;
     }
   }
@@ -286,9 +407,101 @@ ${JSON.stringify(context || {}, null, 2).slice(0, 12000)}`;
     status: 502,
     body: {
       code: 'AI_UPSTREAM_ERROR',
-      error: `AI provider request failed: ${errMsg}`,
+      error: `AI provider request failed: ${formatAiUpstreamError(errMsg)}`,
     },
   };
+}
+
+export async function handleAiChatStream(
+  payload: AiChatPayload,
+  callbacks: {
+    onDelta: (delta: string) => void;
+    onDone: (meta: { model: string; timestamp: string }) => void;
+    onError: (status: number, body: Record<string, unknown>) => void;
+  }
+): Promise<void> {
+  const prepared = prepareAiChat(payload);
+  if (!prepared.ok) {
+    callbacks.onError(prepared.error.status, prepared.error.body);
+    return;
+  }
+
+  const { ai, trimmedMessage, systemInstruction, history, candidateModels } = prepared.data;
+  let lastError: unknown = null;
+
+  for (let modelIdx = 0; modelIdx < candidateModels.length; modelIdx++) {
+    const activeModel = candidateModels[modelIdx];
+    const hasNextModel = modelIdx < candidateModels.length - 1;
+    let shouldTryFallbackModel = false;
+    let emittedAnyChunk = false;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const chat = ai.chats.create({
+          model: activeModel,
+          history,
+          config: {
+            systemInstruction,
+            ...(activeModel.startsWith('gemini-4-')
+              ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+              : {}),
+          },
+        });
+        const stream = await chat.sendMessageStream({
+          message: trimmedMessage,
+        });
+        for await (const chunk of stream) {
+          const c = chunk as GenerateContentResponse;
+          const delta = c.text;
+          if (delta) {
+            emittedAnyChunk = true;
+            callbacks.onDelta(delta);
+          }
+        }
+        if (!emittedAnyChunk) {
+          callbacks.onError(502, { error: 'AI service returned an empty response.' });
+          return;
+        }
+        callbacks.onDone({
+          model: activeModel,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (emittedAnyChunk) {
+          break;
+        }
+        const errText = error instanceof Error ? error.message : String(error);
+        if (isModelUnavailableError(errText)) {
+          shouldTryFallbackModel = true;
+          break;
+        }
+        if (isTransientError(errText)) {
+          if (hasNextModel) {
+            shouldTryFallbackModel = true;
+            break;
+          }
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 700));
+            continue;
+          }
+        }
+        break;
+      }
+    }
+
+    if (!shouldTryFallbackModel) {
+      break;
+    }
+  }
+
+  const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
+  console.error('ZACMA AI Assistant stream error:', errMsg);
+  callbacks.onError(502, {
+    code: 'AI_UPSTREAM_ERROR',
+    error: `AI provider request failed: ${formatAiUpstreamError(errMsg)}`,
+  });
 }
 
 export async function handleSetupStatus(rootDir: string = process.cwd()): Promise<HandlerResult> {

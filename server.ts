@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   handleAiChat,
+  handleAiChatStream,
   handleCronReminders,
   handleDispatchExternal,
   handleHealth,
@@ -29,6 +30,38 @@ async function createApp() {
   app.post('/api/ai/chat', async (req: Request, res: Response) => {
     const out = await handleAiChat(req.body);
     res.status(out.status).json(out.body);
+  });
+
+  app.post('/api/ai/chat/stream', async (req: Request, res: Response) => {
+    let headersSent = false;
+    const ensureSseHeaders = () => {
+      if (headersSent) return;
+      headersSent = true;
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+    };
+
+    await handleAiChatStream(req.body, {
+      onDelta: (delta) => {
+        ensureSseHeaders();
+        res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+      },
+      onDone: (meta) => {
+        ensureSseHeaders();
+        res.write(`data: ${JSON.stringify({ done: true, ...meta })}\n\n`);
+        res.end();
+      },
+      onError: (status, body) => {
+        if (!headersSent) {
+          res.status(status).json(body);
+        } else {
+          res.write(`data: ${JSON.stringify({ error: body.error || 'AI stream interrupted' })}\n\n`);
+          res.end();
+        }
+      },
+    });
   });
 
   app.get('/api/setup/status', async (_req: Request, res: Response) => {

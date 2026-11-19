@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Check,
   CheckCircle2,
+  Copy,
   Database,
   ExternalLink,
+  Eye,
   FileCode2,
   GitBranch,
   Globe,
@@ -22,6 +25,10 @@ import {
 import { usePortal } from '../context/PortalContext';
 import { ConfirmDialog } from '../components/PortalUI';
 import { activeFirebaseDatabaseId, activeFirebaseProjectId } from '../lib/firebase';
+import {
+  BUNDLED_SQL_MIGRATIONS,
+  COMBINED_SUPABASE_MIGRATION_SQL,
+} from '../lib/supabaseMigrationsRaw';
 import { applyIdempotentMigrations, MigrationExecutionStep } from '../lib/zacmaService';
 import { formatDateShort } from '../types/zacma';
 
@@ -170,6 +177,19 @@ export function SetupWizardView() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [runningMigration, setRunningMigration] = useState(false);
   const [lastSteps, setLastSteps] = useState<MigrationExecutionStep[]>([]);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [previewSqlVersion, setPreviewSqlVersion] = useState<string | null>(null);
+
+  const handleCopySql = async (key: string, sql: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(sql);
+      setCopiedKey(key);
+      pushToast('success', `Copied ${label}. Paste directly into Supabase SQL Editor and click Run.`);
+      window.setTimeout(() => setCopiedKey(null), 2500);
+    } catch {
+      pushToast('error', 'Clipboard copy blocked by browser. Use Preview SQL to copy manually.');
+    }
+  };
 
   const fetchStatus = async () => {
     setLoadingStatus(true);
@@ -718,46 +738,118 @@ export function SetupWizardView() {
         </div>
 
         <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div className="px-5 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <FileCode2 className="w-4 h-4 text-blue-700" />
+              <FileCode2 className="w-4 h-4 text-blue-700 shrink-0" />
               <div>
                 <h2 className="text-sm font-bold text-slate-900">
                   Version-Controlled Schema Migrations (Idempotent)
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Safe, additive migrations that preserve all existing tables, collections, and student records.
+                  Copy and paste into Supabase SQL Editor to create all ZACMA tables, RLS policies, and reminder functions.
                 </p>
               </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  void handleCopySql(
+                    'ALL',
+                    COMBINED_SUPABASE_MIGRATION_SQL,
+                    'All 4 Supabase SQL Migrations (0001–0004)'
+                  )
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-md transition-colors"
+              >
+                {copiedKey === 'ALL' ? (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    Copied All SQL
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    Copy All SQL (0001–0004)
+                  </>
+                )}
+              </button>
+              <a
+                href="https://supabase.com/dashboard/projects"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md transition-colors"
+              >
+                Open SQL Editor
+                <ExternalLink className="w-3 h-3" />
+              </a>
             </div>
           </div>
 
           <div className="divide-y divide-slate-100 text-xs">
-            {(status?.sqlMigrations || []).map((mig) => {
+            {BUNDLED_SQL_MIGRATIONS.map((mig) => {
               const applied = schemaMigrations.find((m) => m.version === mig.version);
+              const isPreviewOpen = previewSqlVersion === mig.version;
               return (
-                <div key={mig.version} className="px-5 py-3.5 flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="font-mono font-bold text-slate-900">
-                      {mig.version} · {mig.filename}
-                    </p>
-                    <p className="text-slate-600 mt-0.5">
-                      {MIGRATION_DESCRIPTIONS[mig.version] || 'Additive ZACMA schema migration.'}
-                    </p>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      {(mig.sizeBytes / 1024).toFixed(1)} KB SQL
-                      {applied
-                        ? ` · Verified by ${applied.appliedBy} on ${formatDateShort(applied.appliedAt)}`
-                        : ''}
-                    </p>
+                <div key={mig.version} className="px-5 py-3.5 space-y-2.5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="font-mono font-bold text-slate-900">
+                        {mig.version} · {mig.filename}
+                      </p>
+                      <p className="text-slate-600 mt-0.5">
+                        {MIGRATION_DESCRIPTIONS[mig.version] || 'Additive ZACMA schema migration.'}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-3 mt-1.5">
+                        <span className="text-[11px] text-slate-400">
+                          {(mig.sizeBytes / 1024).toFixed(1)} KB SQL
+                          {applied
+                            ? ` · Verified by ${applied.appliedBy} on ${formatDateShort(applied.appliedAt)}`
+                            : ''}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleCopySql(mig.version, mig.sql, mig.filename)}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:underline"
+                        >
+                          {copiedKey === mig.version ? (
+                            <>
+                              <Check className="w-3 h-3" />
+                              Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" />
+                              Copy SQL
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPreviewSqlVersion(isPreviewOpen ? null : mig.version)
+                          }
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 hover:underline"
+                        >
+                          <Eye className="w-3 h-3" />
+                          {isPreviewOpen ? 'Hide SQL' : 'Preview SQL'}
+                        </button>
+                      </div>
+                    </div>
+                    <span
+                      className={`text-xs font-semibold shrink-0 ${
+                        appliedVersionSet.has(mig.version) ? 'text-emerald-700' : 'text-amber-700'
+                      }`}
+                    >
+                      {appliedVersionSet.has(mig.version) ? 'Applied' : 'Ready to Apply'}
+                    </span>
                   </div>
-                  <span
-                    className={`text-xs font-semibold shrink-0 ${
-                      appliedVersionSet.has(mig.version) ? 'text-emerald-700' : 'text-amber-700'
-                    }`}
-                  >
-                    {appliedVersionSet.has(mig.version) ? 'Applied' : 'Ready to Apply'}
-                  </span>
+
+                  {isPreviewOpen && (
+                    <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg text-[11px] font-mono overflow-x-auto max-h-64 overflow-y-auto leading-relaxed">
+                      {mig.sql}
+                    </pre>
+                  )}
                 </div>
               );
             })}
