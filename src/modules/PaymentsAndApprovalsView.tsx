@@ -43,6 +43,7 @@ export function PaymentsView({ onOpenReceipt }: { onOpenReceipt: (receipt: Recei
     profile,
     effectiveRole,
     dataLoading,
+    courses,
     payments,
     receipts,
     enrollments,
@@ -52,6 +53,8 @@ export function PaymentsView({ onOpenReceipt }: { onOpenReceipt: (receipt: Recei
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
   const [methodFilter, setMethodFilter] = useState('ALL');
+  const [courseFilter, setCourseFilter] = useState('ALL');
+  const [dateFilter, setDateFilter] = useState('');
   const [page, setPage] = useState(1);
   const [showRecordModal, setShowRecordModal] = useState(false);
 
@@ -60,15 +63,18 @@ export function PaymentsView({ onOpenReceipt }: { onOpenReceipt: (receipt: Recei
     return payments.filter((p) => {
       if (statusFilter !== 'ALL' && p.status !== statusFilter) return false;
       if (methodFilter !== 'ALL' && p.paymentMethod !== methodFilter) return false;
+      if (courseFilter !== 'ALL' && p.courseName !== courseFilter) return false;
+      if (dateFilter && p.paymentDate !== dateFilter) return false;
       if (!q) return true;
       return (
         p.transactionRef.toLowerCase().includes(q) ||
         p.studentName.toLowerCase().includes(q) ||
         p.studentCode.toLowerCase().includes(q) ||
-        p.courseName.toLowerCase().includes(q)
+        p.courseName.toLowerCase().includes(q) ||
+        p.paymentDate.toLowerCase().includes(q)
       );
     });
-  }, [payments, search, statusFilter, methodFilter]);
+  }, [payments, search, statusFilter, methodFilter, courseFilter, dateFilter]);
 
   const paginated = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
@@ -134,7 +140,7 @@ export function PaymentsView({ onOpenReceipt }: { onOpenReceipt: (receipt: Recei
       {/* Filters */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[260px]">
-          <div className="relative flex-1 max-w-xs">
+          <div className="relative flex-1 min-w-[200px] max-w-xs">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -143,10 +149,35 @@ export function PaymentsView({ onOpenReceipt }: { onOpenReceipt: (receipt: Recei
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              placeholder="Search reference, student name, ID..."
+              placeholder="Search name, ID, ref, course, date..."
               className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-700"
             />
           </div>
+          <select
+            value={courseFilter}
+            onChange={(e) => {
+              setCourseFilter(e.target.value);
+              setPage(1);
+            }}
+            className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+          >
+            <option value="ALL">All Courses</option>
+            {courses.map((c) => (
+              <option key={c.id} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <input
+            type="date"
+            value={dateFilter}
+            onChange={(e) => {
+              setDateFilter(e.target.value);
+              setPage(1);
+            }}
+            aria-label="Filter payments by date"
+            className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+          />
           <select
             value={methodFilter}
             onChange={(e) => {
@@ -162,6 +193,22 @@ export function PaymentsView({ onOpenReceipt }: { onOpenReceipt: (receipt: Recei
             <option value="Bank Transfer">Bank Transfer</option>
             <option value="Check">Check</option>
           </select>
+          {(search || courseFilter !== 'ALL' || dateFilter || methodFilter !== 'ALL' || statusFilter !== 'ALL') && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('');
+                setCourseFilter('ALL');
+                setDateFilter('');
+                setMethodFilter('ALL');
+                setStatusFilter('ALL');
+                setPage(1);
+              }}
+              className="text-xs font-semibold text-blue-700 hover:underline whitespace-nowrap"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
@@ -522,6 +569,7 @@ export function ApprovalsQueueView() {
   const {
     profile,
     effectiveRole,
+    courses,
     payments,
     students,
     enrollments,
@@ -531,6 +579,9 @@ export function ApprovalsQueueView() {
   } = usePortal();
 
   const [tab, setTab] = useState<'payments' | 'registrations'>('payments');
+  const [search, setSearch] = useState('');
+  const [courseFilter, setCourseFilter] = useState('ALL');
+  const [dateFilter, setDateFilter] = useState('');
   const [confirmPayment, setConfirmPayment] = useState<{
     action: 'approve' | 'reject';
     payment: Payment;
@@ -553,8 +604,32 @@ export function ApprovalsQueueView() {
     );
   }
 
-  const pendingPayments = payments.filter((p) => p.status === 'PENDING');
-  const pendingStudents = students.filter((s) => s.registrationStatus === 'PENDING');
+  const q = search.trim().toLowerCase();
+  const pendingPayments = payments.filter((p) => {
+    if (p.status !== 'PENDING') return false;
+    if (courseFilter !== 'ALL' && p.courseName !== courseFilter) return false;
+    if (dateFilter && p.paymentDate !== dateFilter) return false;
+    if (!q) return true;
+    return (
+      p.studentName.toLowerCase().includes(q) ||
+      p.studentCode.toLowerCase().includes(q) ||
+      p.transactionRef.toLowerCase().includes(q) ||
+      p.courseName.toLowerCase().includes(q) ||
+      p.paymentDate.toLowerCase().includes(q)
+    );
+  });
+  const pendingStudents = students.filter((s) => {
+    if (s.registrationStatus !== 'PENDING') return false;
+    if (courseFilter !== 'ALL' && s.courseName !== courseFilter) return false;
+    if (dateFilter && s.enrollmentDate !== dateFilter) return false;
+    if (!q) return true;
+    return (
+      s.fullName.toLowerCase().includes(q) ||
+      s.studentCode.toLowerCase().includes(q) ||
+      s.courseName.toLowerCase().includes(q) ||
+      s.enrollmentDate.toLowerCase().includes(q)
+    );
+  });
 
   const executePaymentAction = async (reason?: string) => {
     if (!confirmPayment || !profile) return;
@@ -652,6 +727,52 @@ export function ApprovalsQueueView() {
             Student Registrations ({pendingStudents.length})
           </button>
         </div>
+      </div>
+
+      {/* Filter Bar (Name, ID, Course, Date) */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[200px] max-w-xs">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search name, ID, ref, course, date..."
+            className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-700"
+          />
+        </div>
+        <select
+          value={courseFilter}
+          onChange={(e) => setCourseFilter(e.target.value)}
+          className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+        >
+          <option value="ALL">All Courses</option>
+          {courses.map((c) => (
+            <option key={c.id} value={c.name}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <input
+          type="date"
+          value={dateFilter}
+          onChange={(e) => setDateFilter(e.target.value)}
+          aria-label="Filter pending approvals by date"
+          className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+        />
+        {(search || courseFilter !== 'ALL' || dateFilter) && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearch('');
+              setCourseFilter('ALL');
+              setDateFilter('');
+            }}
+            className="text-xs font-semibold text-blue-700 hover:underline whitespace-nowrap"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       {tab === 'payments' ? (
@@ -835,23 +956,28 @@ export function ApprovalsQueueView() {
 }
 
 export function ReceiptsArchiveView({ onOpenReceipt }: { onOpenReceipt: (receipt: Receipt) => void }) {
-  const { dataLoading, receipts } = usePortal();
+  const { dataLoading, courses, receipts } = usePortal();
   const [search, setSearch] = useState('');
+  const [courseFilter, setCourseFilter] = useState('ALL');
+  const [dateFilter, setDateFilter] = useState('');
   const [page, setPage] = useState(1);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return receipts.filter((r) => {
+      if (courseFilter !== 'ALL' && r.courseName !== courseFilter) return false;
+      if (dateFilter && r.paymentDate !== dateFilter) return false;
       if (!q) return true;
       return (
         r.receiptNumber.toLowerCase().includes(q) ||
         r.studentName.toLowerCase().includes(q) ||
         r.studentCode.toLowerCase().includes(q) ||
         r.transactionRef.toLowerCase().includes(q) ||
-        r.courseName.toLowerCase().includes(q)
+        r.courseName.toLowerCase().includes(q) ||
+        r.paymentDate.toLowerCase().includes(q)
       );
     });
-  }, [receipts, search]);
+  }, [receipts, search, courseFilter, dateFilter]);
 
   const paginated = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
@@ -869,8 +995,8 @@ export function ReceiptsArchiveView({ onOpenReceipt }: { onOpenReceipt: (receipt
         </p>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl p-4">
-        <div className="relative max-w-sm">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
@@ -879,10 +1005,49 @@ export function ReceiptsArchiveView({ onOpenReceipt }: { onOpenReceipt: (receipt
               setSearch(e.target.value);
               setPage(1);
             }}
-            placeholder="Search receipt #, student name, ID, transaction ref..."
+            placeholder="Search receipt #, name, ID, course, date..."
             className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-700"
           />
         </div>
+        <select
+          value={courseFilter}
+          onChange={(e) => {
+            setCourseFilter(e.target.value);
+            setPage(1);
+          }}
+          className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+        >
+          <option value="ALL">All Courses</option>
+          {courses.map((c) => (
+            <option key={c.id} value={c.name}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <input
+          type="date"
+          value={dateFilter}
+          onChange={(e) => {
+            setDateFilter(e.target.value);
+            setPage(1);
+          }}
+          aria-label="Filter receipts by payment date"
+          className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+        />
+        {(search || courseFilter !== 'ALL' || dateFilter) && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearch('');
+              setCourseFilter('ALL');
+              setDateFilter('');
+              setPage(1);
+            }}
+            className="text-xs font-semibold text-blue-700 hover:underline whitespace-nowrap"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">

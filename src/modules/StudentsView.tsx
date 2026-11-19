@@ -51,6 +51,7 @@ export function StudentsView() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
   const [courseFilter, setCourseFilter] = useState<string>('ALL');
+  const [dateFilter, setDateFilter] = useState<string>('');
   const [page, setPage] = useState(1);
 
   const [showRegisterModal, setShowRegisterModal] = useState(false);
@@ -61,25 +62,27 @@ export function StudentsView() {
   } | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
 
-  const isInstructor = effectiveRole === 'INSTRUCTOR';
+  const isNonFinanceStaff = effectiveRole === 'INSTRUCTOR' || effectiveRole === 'GENERAL_STAFF';
   const canRegister = effectiveRole === 'ADMIN' || effectiveRole === 'ACCOUNTANT';
   const canApprove = effectiveRole === 'ADMIN';
 
   const filteredStudents = useMemo(() => {
     const q = search.trim().toLowerCase();
     return students.filter((s) => {
-      if (isInstructor && s.registrationStatus !== 'APPROVED') return false;
+      if (isNonFinanceStaff && s.registrationStatus !== 'APPROVED') return false;
       if (statusFilter !== 'ALL' && s.registrationStatus !== statusFilter) return false;
       if (courseFilter !== 'ALL' && s.courseId !== courseFilter) return false;
+      if (dateFilter && s.enrollmentDate !== dateFilter) return false;
       if (!q) return true;
       return (
         s.fullName.toLowerCase().includes(q) ||
         s.studentCode.toLowerCase().includes(q) ||
         s.phone.toLowerCase().includes(q) ||
-        s.courseName.toLowerCase().includes(q)
+        s.courseName.toLowerCase().includes(q) ||
+        s.enrollmentDate.toLowerCase().includes(q)
       );
     });
-  }, [students, search, statusFilter, courseFilter, isInstructor]);
+  }, [students, search, statusFilter, courseFilter, dateFilter, isNonFinanceStaff]);
 
   const paginated = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
@@ -119,11 +122,11 @@ export function StudentsView() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-display font-bold text-slate-900 tracking-tight">
-            {isInstructor ? 'Enrolled Students Directory' : 'Student Management & Registrations'}
+            {isNonFinanceStaff ? 'Enrolled Students Directory' : 'Student Management & Registrations'}
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            {isInstructor
-              ? 'Active students approved for classroom attendance across ZACMA courses.'
+            {isNonFinanceStaff
+              ? 'Active students approved for ZACMA courses. Financial records are isolated to Finance and Admin roles.'
               : 'Register trainees with unique institutional IDs, payment plans, and admin approval controls.'}
           </p>
         </div>
@@ -139,10 +142,10 @@ export function StudentsView() {
         )}
       </div>
 
-      {/* Filter Toolbar */}
+      {/* Filter Toolbar (Name, ID, Course, Enrollment Date) */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[260px]">
-          <div className="relative flex-1 max-w-xs">
+          <div className="relative flex-1 min-w-[200px] max-w-xs">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -151,7 +154,7 @@ export function StudentsView() {
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              placeholder="Search name, ID (ZAC-2026...), phone..."
+              placeholder="Search name, ID, course, date..."
               className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-700"
             />
           </div>
@@ -171,9 +174,36 @@ export function StudentsView() {
               </option>
             ))}
           </select>
+
+          <input
+            type="date"
+            value={dateFilter}
+            onChange={(e) => {
+              setDateFilter(e.target.value);
+              setPage(1);
+            }}
+            aria-label="Filter students by enrollment date"
+            className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700 focus:outline-none focus:border-blue-700"
+          />
+
+          {(search || courseFilter !== 'ALL' || dateFilter || statusFilter !== 'ALL') && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('');
+                setCourseFilter('ALL');
+                setDateFilter('');
+                setStatusFilter('ALL');
+                setPage(1);
+              }}
+              className="text-xs font-semibold text-blue-700 hover:underline whitespace-nowrap"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
 
-        {!isInstructor && (
+        {!isNonFinanceStaff && (
           <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
             {(['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const).map((st) => (
               <button
@@ -199,7 +229,7 @@ export function StudentsView() {
       {/* Student Ledger Table */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         {dataLoading ? (
-          <TableSkeleton rows={6} cols={isInstructor ? 5 : 7} />
+          <TableSkeleton rows={6} cols={isNonFinanceStaff ? 5 : 7} />
         ) : paginated.length === 0 ? (
           <EmptyState
             title="No student records match your filters"
@@ -215,8 +245,8 @@ export function StudentsView() {
                   <th className="py-3 px-4">Student</th>
                   <th className="py-3 px-3">Course &amp; Enrolled</th>
                   <th className="py-3 px-3">Contact</th>
-                  {!isInstructor && <th className="py-3 px-3 text-right">Course Fee</th>}
-                  {!isInstructor && <th className="py-3 px-3 text-right">Balance (ETB)</th>}
+                  {!isNonFinanceStaff && <th className="py-3 px-3 text-right">Course Fee</th>}
+                  {!isNonFinanceStaff && <th className="py-3 px-3 text-right">Balance (ETB)</th>}
                   <th className="py-3 px-3">Status</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -241,7 +271,7 @@ export function StudentsView() {
                         <p className="font-medium text-slate-900">{student.courseName}</p>
                         <p className="text-[11px] text-slate-500">
                           {formatDateShort(student.enrollmentDate)}
-                          {!isInstructor ? ` · ${student.paymentPlanCode.replace('_', ' ')}` : ''}
+                          {!isNonFinanceStaff ? ` · ${student.paymentPlanCode.replace('_', ' ')}` : ''}
                         </p>
                       </td>
                       <td className="py-3 px-3 text-slate-600">
@@ -250,12 +280,12 @@ export function StudentsView() {
                           {student.address}
                         </p>
                       </td>
-                      {!isInstructor && (
+                      {!isNonFinanceStaff && (
                         <td className="py-3 px-3 text-right font-mono tabular-nums text-slate-700 whitespace-nowrap">
                           {formatEtb(student.courseFeeEtb)}
                         </td>
                       )}
-                      {!isInstructor && (
+                      {!isNonFinanceStaff && (
                         <td className="py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap">
                           <span
                             className={`font-semibold ${
@@ -335,7 +365,7 @@ export function StudentsView() {
           student={selectedStudent}
           enrollment={enrollments.find((e) => e.studentId === selectedStudent.id)}
           installments={installments.filter((i) => i.studentId === selectedStudent.id)}
-          hideFinancials={isInstructor}
+          hideFinancials={isNonFinanceStaff}
           onClose={() => setSelectedStudent(null)}
         />
       )}

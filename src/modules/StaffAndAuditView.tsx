@@ -6,10 +6,48 @@ import { ConfirmDialog, EmptyState, PaginationBar } from '../components/PortalUI
 import { formatDateShort, RoleCode, StaffProfile, todayIsoDate } from '../types/zacma';
 
 export function StaffRolesView() {
-  const { profile, effectiveRole, staffProfiles, roles, students, pushToast } = usePortal();
+  const { profile, effectiveRole, staffProfiles, roles, students, courses, pushToast } = usePortal();
   const [editing, setEditing] = useState<StaffProfile | 'NEW' | null>(null);
   const [deleting, setDeleting] = useState<StaffProfile | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'ALL' | RoleCode>('ALL');
+  const [courseFilter, setCourseFilter] = useState('ALL');
+  const [dateFilter, setDateFilter] = useState('');
+
+  const filteredStaff = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return staffProfiles.filter((member) => {
+      if (roleFilter !== 'ALL' && member.role !== roleFilter) return false;
+      const linkedStu = member.linkedStudentId
+        ? students.find((s) => s.id === member.linkedStudentId)
+        : undefined;
+      const assignedCourses = courses.filter(
+        (c) => c.instructorId === member.uid || c.instructorName === member.fullName
+      );
+      if (courseFilter !== 'ALL') {
+        const matchesAssignedCourse = assignedCourses.some((c) => c.id === courseFilter);
+        const matchesLinkedStudentCourse = linkedStu?.courseId === courseFilter;
+        if (!matchesAssignedCourse && !matchesLinkedStudentCourse) return false;
+      }
+      if (dateFilter && !(member.createdAt || '').startsWith(dateFilter)) return false;
+      if (!q) return true;
+      return (
+        member.fullName.toLowerCase().includes(q) ||
+        member.uid.toLowerCase().includes(q) ||
+        member.email.toLowerCase().includes(q) ||
+        (member.phone || '').toLowerCase().includes(q) ||
+        member.role.toLowerCase().includes(q) ||
+        (member.createdAt || '').toLowerCase().includes(q) ||
+        (linkedStu?.studentCode || '').toLowerCase().includes(q) ||
+        (linkedStu?.courseName || '').toLowerCase().includes(q) ||
+        assignedCourses.some(
+          (c) => c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q)
+        )
+      );
+    });
+  }, [staffProfiles, students, courses, search, roleFilter, courseFilter, dateFilter]);
 
   if (effectiveRole !== 'ADMIN') {
     return (
@@ -55,75 +93,144 @@ export function StaffRolesView() {
         ))}
       </div>
 
+      {/* Staff Search Bar (Name, ID, Course, Date, Role) */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[210px] max-w-sm">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search staff name, ID, email, course, date..."
+            className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-700"
+          />
+        </div>
+        <select
+          value={roleFilter}
+          onChange={(e) => setRoleFilter(e.target.value as 'ALL' | RoleCode)}
+          className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+        >
+          <option value="ALL">All Roles</option>
+          <option value="ADMIN">ADMIN</option>
+          <option value="ACCOUNTANT">ACCOUNTANT</option>
+          <option value="INSTRUCTOR">INSTRUCTOR</option>
+          <option value="GENERAL_STAFF">GENERAL_STAFF</option>
+          <option value="STUDENT">STUDENT</option>
+        </select>
+        <select
+          value={courseFilter}
+          onChange={(e) => setCourseFilter(e.target.value)}
+          className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+        >
+          <option value="ALL">All Courses</option>
+          {courses.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <input
+          type="date"
+          value={dateFilter}
+          onChange={(e) => setDateFilter(e.target.value)}
+          aria-label="Filter staff accounts by created date"
+          className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+        />
+        {(search || roleFilter !== 'ALL' || courseFilter !== 'ALL' || dateFilter) && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearch('');
+              setRoleFilter('ALL');
+              setCourseFilter('ALL');
+              setDateFilter('');
+            }}
+            className="text-xs font-semibold text-blue-700 hover:underline whitespace-nowrap"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
       {/* Staff Directory Table */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-semibold text-slate-500">
-                <th className="py-3 px-4">Staff Member</th>
-                <th className="py-3 px-3">Email &amp; Phone</th>
-                <th className="py-3 px-3">Assigned Role</th>
-                <th className="py-3 px-3">Account Status</th>
-                <th className="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs">
-              {staffProfiles.map((member) => {
-                const isSelf = member.uid === profile?.uid;
-                return (
-                  <tr key={member.id} className="hover:bg-slate-50/80">
-                    <td className="py-3 px-4">
-                      <p className="font-semibold text-slate-900">
-                        {member.fullName}{' '}
-                        {isSelf && <span className="text-blue-700 font-normal">(You)</span>}
-                      </p>
-                      <p className="text-[11px] font-mono text-slate-500">{member.uid}</p>
-                    </td>
-                    <td className="py-3 px-3 text-slate-600">
-                      <p>{member.email}</p>
-                      <p className="text-[11px] font-mono text-slate-500">{member.phone || '—'}</p>
-                    </td>
-                    <td className="py-3 px-3 font-mono font-semibold text-slate-900">
-                      {member.role}
-                    </td>
-                    <td className="py-3 px-3">
-                      <span
-                        className={`font-semibold ${
-                          member.isActive ? 'text-emerald-700' : 'text-red-700'
-                        }`}
-                      >
-                        {member.isActive ? 'Active' : 'Suspended'}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-right whitespace-nowrap">
-                      <div className="inline-flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setEditing(member)}
-                          className="p-1.5 text-slate-500 hover:text-blue-700 rounded-md"
-                          aria-label={`Edit ${member.fullName}`}
+        {filteredStaff.length === 0 ? (
+          <EmptyState
+            title="No staff accounts match your search"
+            description="Adjust your name, ID, course, role, or date filter."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-semibold text-slate-500">
+                  <th className="py-3 px-4">Staff Member</th>
+                  <th className="py-3 px-3">Email &amp; Phone</th>
+                  <th className="py-3 px-3">Assigned Role</th>
+                  <th className="py-3 px-3">Account Status</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {filteredStaff.map((member) => {
+                  const isSelf = member.uid === profile?.uid;
+                  return (
+                    <tr key={member.id} className="hover:bg-slate-50/80">
+                      <td className="py-3 px-4">
+                        <p className="font-semibold text-slate-900">
+                          {member.fullName}{' '}
+                          {isSelf && <span className="text-blue-700 font-normal">(You)</span>}
+                        </p>
+                        <p className="text-[11px] font-mono text-slate-500">
+                          {member.uid}
+                          {member.createdAt ? ` · Added ${formatDateShort(member.createdAt)}` : ''}
+                        </p>
+                      </td>
+                      <td className="py-3 px-3 text-slate-600">
+                        <p>{member.email}</p>
+                        <p className="text-[11px] font-mono text-slate-500">{member.phone || '—'}</p>
+                      </td>
+                      <td className="py-3 px-3 font-mono font-semibold text-slate-900">
+                        {member.role}
+                      </td>
+                      <td className="py-3 px-3">
+                        <span
+                          className={`font-semibold ${
+                            member.isActive ? 'text-emerald-700' : 'text-red-700'
+                          }`}
                         >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                        {!isSelf && (
+                          {member.isActive ? 'Active' : 'Suspended'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setDeleting(member)}
-                            className="p-1.5 text-slate-400 hover:text-red-600 rounded-md"
-                            aria-label={`Remove ${member.fullName}`}
+                            onClick={() => setEditing(member)}
+                            className="p-1.5 text-slate-500 hover:text-blue-700 rounded-md"
+                            aria-label={`Edit ${member.fullName}`}
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Edit3 className="w-4 h-4" />
                           </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                          {!isSelf && (
+                            <button
+                              type="button"
+                              onClick={() => setDeleting(member)}
+                              className="p-1.5 text-slate-400 hover:text-red-600 rounded-md"
+                              aria-label={`Remove ${member.fullName}`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {editing && profile && (
@@ -331,6 +438,7 @@ export function AuditLogsView() {
   const { effectiveRole, auditLogs, pushToast } = usePortal();
   const [search, setSearch] = useState('');
   const [entityFilter, setEntityFilter] = useState('ALL');
+  const [dateFilter, setDateFilter] = useState('');
   const [page, setPage] = useState(1);
 
   if (effectiveRole !== 'ADMIN') {
@@ -349,15 +457,17 @@ export function AuditLogsView() {
     const q = search.trim().toLowerCase();
     return auditLogs.filter((l) => {
       if (entityFilter !== 'ALL' && l.entityType !== entityFilter) return false;
+      if (dateFilter && !(l.createdAt || '').startsWith(dateFilter)) return false;
       if (!q) return true;
       return (
         l.actorName.toLowerCase().includes(q) ||
         l.action.toLowerCase().includes(q) ||
         l.summary.toLowerCase().includes(q) ||
-        l.entityId.toLowerCase().includes(q)
+        l.entityId.toLowerCase().includes(q) ||
+        (l.createdAt || '').toLowerCase().includes(q)
       );
     });
-  }, [auditLogs, search, entityFilter]);
+  }, [auditLogs, search, entityFilter, dateFilter]);
 
   const paginated = filtered.slice((page - 1) * 12, page * 12);
 
@@ -429,6 +539,30 @@ export function AuditLogsView() {
           <option value="attendance">Attendance</option>
           <option value="profile">Staff Roles</option>
         </select>
+        <input
+          type="date"
+          value={dateFilter}
+          onChange={(e) => {
+            setDateFilter(e.target.value);
+            setPage(1);
+          }}
+          aria-label="Filter audit logs by date"
+          className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+        />
+        {(search || entityFilter !== 'ALL' || dateFilter) && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearch('');
+              setEntityFilter('ALL');
+              setDateFilter('');
+              setPage(1);
+            }}
+            className="text-xs font-semibold text-blue-700 hover:underline whitespace-nowrap"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">

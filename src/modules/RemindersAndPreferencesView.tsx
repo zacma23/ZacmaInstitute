@@ -9,6 +9,7 @@ import {
   MessageSquare,
   RefreshCw,
   Save,
+  Search,
   Send,
   ShieldAlert,
   Smartphone,
@@ -50,6 +51,7 @@ export function RemindersAndPreferencesView() {
   const {
     user,
     effectiveRole,
+    courses,
     enrollments,
     installments,
     persistedNotifications,
@@ -70,6 +72,9 @@ export function RemindersAndPreferencesView() {
 
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [readFilter, setReadFilter] = useState<'ALL' | 'UNREAD' | 'READ'>('ALL');
+  const [watchlistSearch, setWatchlistSearch] = useState('');
+  const [watchlistCourse, setWatchlistCourse] = useState('ALL');
+  const [watchlistDate, setWatchlistDate] = useState('');
   const [channelStatus, setChannelStatus] = useState<ServerChannelStatus | null>(null);
   const [testingChannel, setTestingChannel] = useState<string | null>(null);
   const [channelTestResult, setChannelTestResult] = useState<string | null>(null);
@@ -220,6 +225,21 @@ export function RemindersAndPreferencesView() {
     ...scheduleSummary.upcoming.map((i) => ({ ...i, bucket: 'UPCOMING' as const })),
   ];
 
+  const filteredWatchlist = useMemo(() => {
+    const q = watchlistSearch.trim().toLowerCase();
+    return priorityInstallments.filter((inst) => {
+      if (watchlistCourse !== 'ALL' && inst.courseName !== watchlistCourse) return false;
+      if (watchlistDate && inst.dueDate !== watchlistDate) return false;
+      if (!q) return true;
+      return (
+        inst.studentName.toLowerCase().includes(q) ||
+        inst.studentCode.toLowerCase().includes(q) ||
+        inst.courseName.toLowerCase().includes(q) ||
+        inst.dueDate.toLowerCase().includes(q)
+      );
+    });
+  }, [priorityInstallments, watchlistSearch, watchlistCourse, watchlistDate]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -302,7 +322,7 @@ export function RemindersAndPreferencesView() {
 
       {/* Priority Installments Table */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+        <div className="px-5 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-bold text-slate-900">
               Active Deadline &amp; Overdue Watchlist
@@ -311,11 +331,63 @@ export function RemindersAndPreferencesView() {
               Students whose payment period is approaching, due today, or overdue (approved payments only)
             </p>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[180px]">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={watchlistSearch}
+                onChange={(e) => setWatchlistSearch(e.target.value)}
+                placeholder="Name, ID, course, date..."
+                className="w-full pl-8 pr-2.5 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-700"
+              />
+            </div>
+            <select
+              value={watchlistCourse}
+              onChange={(e) => setWatchlistCourse(e.target.value)}
+              className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+            >
+              <option value="ALL">All Courses</option>
+              {courses.map((c) => (
+                <option key={c.id} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <input
+              type="date"
+              value={watchlistDate}
+              onChange={(e) => setWatchlistDate(e.target.value)}
+              aria-label="Filter watchlist by due date"
+              className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
+            />
+            {(watchlistSearch || watchlistCourse !== 'ALL' || watchlistDate) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setWatchlistSearch('');
+                  setWatchlistCourse('ALL');
+                  setWatchlistDate('');
+                }}
+                className="text-xs font-semibold text-blue-700 hover:underline whitespace-nowrap"
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
-        {priorityInstallments.length === 0 ? (
+        {filteredWatchlist.length === 0 ? (
           <EmptyState
-            title="All active installments are in good standing"
-            description="No overdue, due-today, or upcoming unpaid installments within your lead window."
+            title={
+              priorityInstallments.length === 0
+                ? 'All active installments are in good standing'
+                : 'No installments match your filters'
+            }
+            description={
+              priorityInstallments.length === 0
+                ? 'No overdue, due-today, or upcoming unpaid installments within your lead window.'
+                : 'Clear your name, ID, course, or due date filter to view all deadlines.'
+            }
           />
         ) : (
           <div className="overflow-x-auto">
@@ -332,7 +404,7 @@ export function RemindersAndPreferencesView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs">
-                {priorityInstallments.map((inst) => {
+                {filteredWatchlist.map((inst) => {
                   const enr = enrollmentById.get(inst.enrollmentId);
                   return (
                     <tr key={inst.id} className="hover:bg-slate-50/80">

@@ -23,6 +23,7 @@ export function AttendanceView() {
   const [attendanceDate, setAttendanceDate] = useState(todayIsoDate());
   const [draftStatus, setDraftStatus] = useState<Record<string, AttendanceStatus>>({});
   const [draftRemarks, setDraftRemarks] = useState<Record<string, string>>({});
+  const [rosterSearch, setRosterSearch] = useState('');
   const [saving, setSaving] = useState(false);
 
   // Report filters
@@ -49,6 +50,17 @@ export function AttendanceView() {
       ),
     [enrollments, selectedCourseId]
   );
+
+  const visibleRosterEnrollments = useMemo(() => {
+    const q = rosterSearch.trim().toLowerCase();
+    if (!q) return courseEnrollments;
+    return courseEnrollments.filter(
+      (e) =>
+        e.studentName.toLowerCase().includes(q) ||
+        e.studentCode.toLowerCase().includes(q) ||
+        e.courseName.toLowerCase().includes(q)
+    );
+  }, [courseEnrollments, rosterSearch]);
 
   // Sync draft state whenever selected course, date, or attendance changes
   useEffect(() => {
@@ -103,7 +115,8 @@ export function AttendanceView() {
       return (
         a.studentName.toLowerCase().includes(q) ||
         a.studentCode.toLowerCase().includes(q) ||
-        a.courseName.toLowerCase().includes(q)
+        a.courseName.toLowerCase().includes(q) ||
+        a.attendanceDate.toLowerCase().includes(q)
       );
     });
   }, [attendance, reportCourseFilter, reportDateFilter, reportStudentSearch]);
@@ -218,6 +231,21 @@ export function AttendanceView() {
               </div>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                  Search Student (Name / ID)
+                </label>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={rosterSearch}
+                    onChange={(e) => setRosterSearch(e.target.value)}
+                    placeholder="Filter roster by name or ID..."
+                    className="pl-8 pr-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:border-blue-700"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">
                   Session Date
                 </label>
                 <input
@@ -243,10 +271,18 @@ export function AttendanceView() {
           </div>
 
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            {courseEnrollments.length === 0 ? (
+            {visibleRosterEnrollments.length === 0 ? (
               <EmptyState
-                title="No active enrolled students in this class"
-                description="Students appear on the attendance roster once their registration is approved by an Administrator."
+                title={
+                  courseEnrollments.length === 0
+                    ? 'No active enrolled students in this class'
+                    : 'No students match your roster search'
+                }
+                description={
+                  courseEnrollments.length === 0
+                    ? 'Students appear on the attendance roster once their registration is approved by an Administrator.'
+                    : 'Clear the student name/ID search box to view the full class roster.'
+                }
               />
             ) : (
               <div className="overflow-x-auto">
@@ -259,7 +295,7 @@ export function AttendanceView() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
-                    {courseEnrollments.map((enr) => {
+                    {visibleRosterEnrollments.map((enr) => {
                       const stu = students.find((s) => s.id === enr.studentId);
                       const current = draftStatus[enr.id] || 'PRESENT';
                       return (

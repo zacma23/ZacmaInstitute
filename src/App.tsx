@@ -28,6 +28,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginScreen } from './components/LoginScreen';
 import { ReceiptModal } from './components/ReceiptModal';
 import { ToastContainer } from './components/PortalUI';
+import { StaffQuickSearch } from './components/StaffQuickSearch';
 import { ZacmaAiAssistant } from './components/ZacmaAiAssistant';
 import { DashboardView } from './modules/DashboardView';
 import { StudentsView } from './modules/StudentsView';
@@ -348,15 +349,18 @@ function PortalShell() {
               <Menu className="w-5 h-5" />
             </button>
             <div className="flex items-center gap-2 text-xs text-slate-500 min-w-0">
-              <span className="font-semibold text-slate-900 whitespace-nowrap hidden sm:inline">
+              <span className="font-semibold text-slate-900 whitespace-nowrap hidden xl:inline">
                 ZACMA Portal
               </span>
-              <span className="hidden sm:inline">/</span>
+              <span className="hidden xl:inline">/</span>
               <span className="font-semibold text-blue-700 truncate">
                 {currentNav?.label || 'Dashboard'}
               </span>
             </div>
           </div>
+
+          {/* Unified Staff Search (Name, ID, Course, Date) for Admin, Accountant, Instructor & General Staff */}
+          <StaffQuickSearch onNavigate={setActiveTab} onOpenReceipt={setActiveReceipt} />
 
           <div className="flex items-center gap-3 shrink-0">
             {/* Admin Role-Preview Selector (strictly downscopes UI for testing all 5 roles) */}
