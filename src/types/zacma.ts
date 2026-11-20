@@ -41,6 +41,7 @@ export type SuperAdminNavSection =
   | 'sa_global_settings'
   | 'sa_notifications'
   | 'sa_ai_services'
+  | 'sa_ai_assistant'
   | 'sa_analytics'
   | 'sa_audit_logs'
   | 'sa_security'
@@ -97,6 +98,7 @@ export type NotificationType =
 
 export type NavSection =
   | 'dashboard'
+  | 'ai_hub'
   | 'registrations'
   | 'students'
   | 'courses'
@@ -831,6 +833,8 @@ export interface TenantRecord {
   storageUsedMb: number;
   aiMonthlyQuota: number;
   aiRequestsUsed: number;
+  aiMonthlyTokenLimit?: number;
+  aiDocScanLimit?: number;
   enabledModules: SaasModuleCode[];
   primaryAdminUid?: string;
   primaryAdminName: string;
@@ -977,9 +981,79 @@ export interface PlatformGlobalSettings {
   allowSelfSignupInstitutes: boolean;
   enforceSupportSessionReason: boolean;
   maxSupportSessionMinutes: number;
+  defaultAiModel?: AiModelId;
+  aiMonthlyTokenLimit?: number;
+  aiDocScanLimit?: number;
   updatedBy?: string;
   updatedByName?: string;
   updatedAt: string;
+}
+
+export type AiModelId = 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
+
+export type AiRoleScope = 'SUPER_ADMIN' | RoleCode;
+
+export interface AiStoredMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+  modelUsed?: string;
+  totalTokens?: number;
+  estimatedCostUsd?: number;
+  actionDraft?: {
+    kind: 'SMS' | 'EMAIL' | 'REMINDER' | 'ANNOUNCEMENT' | 'EXAM' | 'LESSON_PLAN' | 'COURSE_OUTLINE' | 'JOB_DESCRIPTION' | 'REPORT';
+    title: string;
+    requiresApproval: boolean;
+  };
+}
+
+export interface AiConversationRecord {
+  id: string;
+  tenantId: string;
+  ownerUid: string;
+  ownerName: string;
+  roleScope: AiRoleScope;
+  moduleScope: string;
+  title: string;
+  messagesJson: string;
+  messageCount: number;
+  lastMessagePreview: string;
+  modelId: AiModelId;
+  totalTokens: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AiFeatureType = 'CHAT' | 'DOCUMENT_OCR' | 'REPORT_GEN' | 'DRAFT_GEN' | 'SECURITY_AUDIT';
+
+export interface AiUsageLogRecord {
+  id: string;
+  tenantId: string;
+  userId: string;
+  userName: string;
+  roleScope: string;
+  moduleScope: string;
+  featureType: AiFeatureType;
+  modelId: string;
+  promptTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  status: 'SUCCESS' | 'DENIED' | 'ERROR';
+  createdAt: string;
+}
+
+export interface AiSecurityAuditScenarioResult {
+  id: string;
+  scenarioNumber: number;
+  title: string;
+  attackVector: string;
+  expectedOutcome: string;
+  actualOutcome: string;
+  httpStatus: number;
+  passed: boolean;
+  sanitizedKeysRemoved?: string[];
 }
 
 export interface SupportTicket {

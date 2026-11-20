@@ -7,6 +7,7 @@ import {
   ensureCanonicalZacmaCourses,
 } from '../lib/registrationService';
 import { EmptyState, TableSkeleton } from '../components/PortalUI';
+import { ModuleAiToolbar } from '../components/ModuleAiToolbar';
 import { Course, formatEtb } from '../types/zacma';
 
 export function CoursesView() {
@@ -122,6 +123,8 @@ export function CoursesView() {
           </div>
         )}
       </div>
+
+      <ModuleAiToolbar moduleKey="courses" moduleLabel="Courses & Curriculum" />
 
       {/* Filter Bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-3">

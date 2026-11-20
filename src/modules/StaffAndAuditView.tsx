@@ -17,6 +17,7 @@ import { usePortal } from '../context/PortalContext';
 import { exportRowsToCsv, removeStaffProfile, saveStaffProfile } from '../lib/zacmaService';
 import { saveSecurityConfig } from '../lib/securityService';
 import { ConfirmDialog, EmptyState, PaginationBar } from '../components/PortalUI';
+import { ModuleAiToolbar } from '../components/ModuleAiToolbar';
 import { formatDateShort, NavSection, RoleCode, StaffProfile, todayIsoDate } from '../types/zacma';
 
 const GENERAL_STAFF_MODULE_OPTIONS: Array<{ id: NavSection; label: string; desc: string }> = [
@@ -84,6 +85,7 @@ export function StaffRolesView() {
 
   return (
     <div className="space-y-6">
+      <ModuleAiToolbar moduleKey="staff" moduleLabel="Staff & HR Operations" />
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-display font-bold text-slate-900 tracking-tight">

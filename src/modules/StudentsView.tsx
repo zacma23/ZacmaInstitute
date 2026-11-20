@@ -26,6 +26,7 @@ import {
   TableSkeleton,
 } from '../components/PortalUI';
 import { DualCalendarDatePicker, DualDateDisplay } from '../components/DualCalendarDatePicker';
+import { ModuleAiToolbar } from '../components/ModuleAiToolbar';
 import { todayAddisIsoDate } from '../lib/ethiopianCalendar';
 import {
   addDaysIso,
@@ -124,6 +125,7 @@ export function StudentsView({
 
   return (
     <div className="space-y-6">
+      <ModuleAiToolbar moduleKey="students" moduleLabel="Student Management" />
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-display font-bold text-slate-900 tracking-tight">

@@ -91,8 +91,8 @@ export const ALL_SAAS_MODULES: SaasModuleDefinition[] = [
     code: 'AI_ASSISTANT',
     label: 'AI Portal Assistant',
     category: 'AI & Automation',
-    description: 'Tenant-isolated ZACMA AI Assistant for financial & academic queries.',
-    navSections: [],
+    description: 'Tenant-isolated role-based ZACMA AI Assistant across all authorized modules.',
+    navSections: ['ai_hub'],
   },
   {
     code: 'AI_ID_SCANNING',
@@ -269,6 +269,9 @@ export const DEFAULT_PLATFORM_SETTINGS: PlatformGlobalSettings = {
   allowSelfSignupInstitutes: false,
   enforceSupportSessionReason: true,
   maxSupportSessionMinutes: 60,
+  defaultAiModel: 'gemini-4-hydrogen',
+  aiMonthlyTokenLimit: 2000000,
+  aiDocScanLimit: 500,
   updatedAt: new Date().toISOString(),
 };
 
@@ -289,6 +292,8 @@ export function isNavSectionAllowedByModules(
     case 'audit':
     case 'setup':
       return true;
+    case 'ai_hub':
+      return set.has('AI_ASSISTANT');
     case 'students':
       return set.has('STUDENT_MANAGEMENT');
     case 'registrations':
@@ -323,6 +328,8 @@ export function isNavSectionAllowedByModules(
 
 export function requiredModuleForNavSection(section: NavSection): SaasModuleCode | null {
   switch (section) {
+    case 'ai_hub':
+      return 'AI_ASSISTANT';
     case 'students':
       return 'STUDENT_MANAGEMENT';
     case 'registrations':

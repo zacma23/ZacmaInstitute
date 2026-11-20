@@ -3,6 +3,7 @@ import { Download, Save, Search } from 'lucide-react';
 import { usePortal } from '../context/PortalContext';
 import { exportRowsToCsv, saveDailyAttendanceBatch } from '../lib/zacmaService';
 import { Avatar, EmptyState, StatusLabel } from '../components/PortalUI';
+import { ModuleAiToolbar } from '../components/ModuleAiToolbar';
 import { AttendanceStatus, formatDateShort, todayIsoDate } from '../types/zacma';
 
 const STATUSES: AttendanceStatus[] = ['PRESENT', 'ABSENT', 'LATE', 'EXCUSED'];
@@ -177,6 +178,7 @@ export function AttendanceView() {
 
   return (
     <div className="space-y-6">
+      <ModuleAiToolbar moduleKey="attendance" moduleLabel="Attendance & Classroom Analytics" />
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-display font-bold text-slate-900 tracking-tight">

@@ -32,25 +32,31 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       parsedBody = req.body;
     }
 
-    await handleAiChatStream(parsedBody as Parameters<typeof handleAiChatStream>[0], {
-      onDelta: (delta) => {
-        ensureSseHeaders();
-        res.write(`data: ${JSON.stringify({ delta })}\n\n`);
-      },
-      onDone: (meta) => {
-        ensureSseHeaders();
-        res.write(`data: ${JSON.stringify({ done: true, ...meta })}\n\n`);
-        res.end();
-      },
-      onError: (status, body) => {
-        if (!headersSent) {
-          res.status(status).json(body);
-        } else {
-          res.write(`data: ${JSON.stringify({ error: body.error || 'AI stream interrupted' })}\n\n`);
+    const authHeader =
+      typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined;
+    await handleAiChatStream(
+      parsedBody as Parameters<typeof handleAiChatStream>[0],
+      {
+        onDelta: (delta) => {
+          ensureSseHeaders();
+          res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+        },
+        onDone: (meta) => {
+          ensureSseHeaders();
+          res.write(`data: ${JSON.stringify({ done: true, ...meta })}\n\n`);
           res.end();
-        }
+        },
+        onError: (status, body) => {
+          if (!headersSent) {
+            res.status(status).json(body);
+          } else {
+            res.write(`data: ${JSON.stringify({ error: body.error || 'AI stream interrupted' })}\n\n`);
+            res.end();
+          }
+        },
       },
-    });
+      authHeader
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unexpected server error';
     if (!headersSent) {

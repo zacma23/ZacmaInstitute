@@ -22,7 +22,10 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       parsedBody = req.body;
     }
 
-    const out = await handleAiChat(parsedBody as Parameters<typeof handleAiChat>[0]);
+    const authHeader =
+      typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined;
+    const out = await handleAiChat(parsedBody as Parameters<typeof handleAiChat>[0], authHeader);
+    res.setHeader('Cache-Control', 'no-store');
     return res.status(out.status).json(out.body);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unexpected server error';

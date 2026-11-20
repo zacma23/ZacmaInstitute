@@ -2,7 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { type Content, type GenerateContentResponse, GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { buildKnowledgeContextForRole } from '../src/lib/knowledgeBase.ts';
-import type { RoleCode } from '../src/types/zacma.ts';
+import type { AiRoleScope } from '../src/types/zacma.ts';
+import { authorizeAiRequest, runAiSecurityAuditSuite } from './aiAuthGuard.ts';
 
 export interface HandlerResult {
   status: number;
@@ -229,10 +230,13 @@ export type AiChatMode = 'standard' | 'fast';
 export interface AiChatPayload {
   message?: string;
   history?: Array<{ role: 'user' | 'assistant' | 'model'; text: string }>;
-  role?: RoleCode;
+  role?: AiRoleScope;
   userName?: string;
   tenantId?: string;
   tenantName?: string;
+  isSuperAdminMode?: boolean;
+  activeModule?: string;
+  modelOverride?: 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
   mode?: AiChatMode;
   context?: Record<string, unknown>;
 }
@@ -243,6 +247,18 @@ interface PreparedAiChat {
   systemInstruction: string;
   history: Content[];
   candidateModels: string[];
+  verifiedRole: AiRoleScope;
+  verifiedTenantId: string;
+  verifiedUid: string;
+  strippedKeys: string[];
+}
+
+function estimateAiCostUsd(model: string, promptTokens: number, outputTokens: number): number {
+  const isLite = model.includes('lite');
+  const inputRatePer1M = isLite ? 0.1 : 0.3;
+  const outputRatePer1M = isLite ? 0.4 : 1.2;
+  const cost = (promptTokens / 1_000_000) * inputRatePer1M + (outputTokens / 1_000_000) * outputRatePer1M;
+  return Number(cost.toFixed(6));
 }
 
 function normalizeChatHistory(
@@ -256,10 +272,8 @@ function normalizeChatHistory(
     if (!text) continue;
     const role: 'user' | 'model' = item.role === 'user' ? 'user' : 'model';
 
-    // Ensure history begins with a user turn
     if (normalized.length === 0 && role !== 'user') continue;
 
-    // Merge consecutive same-role messages so multi-turn alternation stays valid
     const prev = normalized[normalized.length - 1];
     if (prev && prev.role === role && prev.parts && prev.parts[0] && 'text' in prev.parts[0]) {
       prev.parts[0].text = `${prev.parts[0].text}\n\n${text}`;
@@ -271,9 +285,10 @@ function normalizeChatHistory(
   return normalized;
 }
 
-function prepareAiChat(
-  payload: AiChatPayload
-): { ok: true; data: PreparedAiChat } | { ok: false; error: HandlerResult } {
+async function prepareAiChat(
+  payload: AiChatPayload,
+  authHeader?: string
+): Promise<{ ok: true; data: PreparedAiChat } | { ok: false; error: HandlerResult }> {
   const ai = getGeminiClient();
   if (!ai) {
     return {
@@ -283,33 +298,24 @@ function prepareAiChat(
         body: {
           code: 'AI_NOT_CONFIGURED',
           error:
-            'ZACMA AI Assistant is not configured on this server (GEMINI_API_KEY missing). In Vercel, open Project Settings -> Environment Variables, add GEMINI_API_KEY (select Production, Preview & Development), and click Redeploy. All other portal modules continue operating normally.',
+            'ZACMA AI Assistant is not configured on this server (GEMINI_API_KEY missing). Add GEMINI_API_KEY to your server environment variables and redeploy. All other portal modules continue operating normally.',
         },
       },
     };
   }
 
-  const { message, history, role, userName, tenantId, tenantName, mode, context } = payload || {};
-  const allowedRoles: RoleCode[] = [
-    'ADMIN',
-    'MANAGER',
-    'ACCOUNTANT',
-    'INSTRUCTOR',
-    'RECEPTIONIST',
-    'HR_OFFICER',
-    'GENERAL_STAFF',
-    'STUDENT',
-  ];
+  const {
+    message,
+    history,
+    role,
+    tenantId,
+    isSuperAdminMode,
+    activeModule,
+    modelOverride,
+    mode,
+    context,
+  } = payload || {};
 
-  if (!role || !allowedRoles.includes(role)) {
-    return {
-      ok: false,
-      error: {
-        status: 401,
-        body: { error: 'Authenticated user role is required.' },
-      },
-    };
-  }
   if (!message || typeof message !== 'string' || !message.trim()) {
     return {
       ok: false,
@@ -320,71 +326,107 @@ function prepareAiChat(
     };
   }
 
-  const knowledgeText = buildKnowledgeContextForRole(role);
-  const safeTenantName = String(tenantName || 'ZACMA Technology Training Institute').slice(0, 120);
-  const safeTenantId = String(tenantId || 'zacma_default').slice(0, 64);
+  // Enforce cryptographic auth, authoritative Firestore profile/tenant lookup,
+  // multi-tenant boundary, role escalation check, prompt-injection shield & context sanitizer.
+  const authDecision = await authorizeAiRequest({
+    authHeader,
+    requestedRole: role,
+    requestedTenantId: tenantId,
+    isSuperAdminMode,
+    message,
+    rawContext: context,
+  });
 
-  const rolePolicy: Record<RoleCode, string> = {
+  if (!authDecision.ok) {
+    return {
+      ok: false,
+      error: {
+        status: authDecision.status,
+        body: {
+          code: authDecision.code,
+          error: authDecision.error,
+        },
+      },
+    };
+  }
+
+  const verifiedRole = authDecision.effectiveRole;
+  const safeTenantName = authDecision.verifiedTenantName.slice(0, 120);
+  const safeTenantId = authDecision.verifiedTenantId.slice(0, 64);
+  const safeModule = String(activeModule || 'general').slice(0, 60);
+  const knowledgeText =
+    verifiedRole === 'SUPER_ADMIN'
+      ? 'ZACMA Super Admin Control Center governs registered training institutes, SaaS subscription tiers, platform billing, module licensing, AI token quotas, support sessions, and cross-platform analytics.'
+      : buildKnowledgeContextForRole(verifiedRole);
+
+  const rolePolicy: Record<AiRoleScope, string> = {
+    SUPER_ADMIN:
+      'User is a ZACMA PLATFORM SUPER ADMIN. You may analyze registered institutes, subscription status, MRR/ARR platform revenue, expiring trials, AI usage/cost telemetry, churn risk, and platform-wide operational health using ONLY the authorized platform context below. Never expose user passwords, API keys, or raw private encrypted ID documents.',
     ADMIN:
-      'User is an INSTITUTE ADMIN. You may explain dashboard statistics, approved revenue, outstanding fees, overdue student reports, pending approvals, financial reports, and system procedures using ONLY the authorized context data for this institute.',
+      'User is an INSTITUTE ADMIN. You may analyze this institute’s executive KPIs, approved revenue, expenses, outstanding fees, overdue students, pending payment approvals, Chapa transactions, attendance trends, staff organization, and draft executive reports or announcements — strictly for THIS institute only. Never reference other institutes or platform-level data.',
     MANAGER:
-      'User is an INSTITUTE MANAGER. You may explain operational statistics, course rosters, enrollment counts, and authorized financial summaries for this institute only.',
+      'User is an INSTITUTE MANAGER. You may analyze this institute’s operational metrics, course enrollment health, attendance trends, overdue lists, and authorized summaries — strictly for THIS institute only. Never disclose Admin-only staff salaries or other institutes.',
     ACCOUNTANT:
-      'User is an ACCOUNTANT. You may explain student registration, payment recording, payment balances, printing approved receipts, and overdue fee lists. Remind the user that Accountants cannot approve their own transactions or alter course fees.',
+      'User is an INSTITUTE ACCOUNTANT. You may analyze fee collections, overdue student balances, pending payment verifications, Chapa reconciliation, potential duplicate payments, expense anomalies, and draft polite fee reminder messages for human approval. Never fabricate amounts, never access HR salary vaults or Super Admin data, and remind that Admin approval is required to finalize payments.',
     INSTRUCTOR:
-      'User is an INSTRUCTOR. STRICT SECURITY RULE: NEVER discuss, disclose, or estimate any financial amounts, ETB fees, revenue, expenses, or payment data. Focus strictly on assigned classes, enrolled students, and attendance workflows.',
+      'User is an INSTRUCTOR. STRICT SECURITY RULE: NEVER discuss, estimate, or reference any financial amounts, fees, revenue, expenses, or salaries. Focus exclusively on THIS instructor’s assigned courses, enrolled students, attendance patterns, lesson plans, quiz/exam creation, assignment ideas, and classroom notices.',
     RECEPTIONIST:
-      'User is a RECEPTIONIST. Focus strictly on front-desk student registration, ID scanning intake, course inquiries, and student directory lookups. Never disclose institutional accounting totals or staff salaries.',
+      'User is a RECEPTIONIST. Focus strictly on front-desk student registration intake, AI ID/QR scanning workflows, course catalog inquiries, admission steps, and non-financial student directory lookups. Never disclose accounting ledgers, revenue, expenses, or staff salaries.',
     HR_OFFICER:
-      'User is an HR OFFICER. Focus strictly on staff registration, onboarding workflows, and departmental organization. Never disclose private student financial ledgers.',
+      'User is an HR OFFICER. Focus strictly on staff registration, onboarding workflows, departmental coverage, job descriptions, HR policies, and staff directory organization. Never disclose private student financial ledgers or Admin-only payroll/compensation vaults.',
     GENERAL_STAFF:
-      'User is GENERAL STAFF. Focus strictly on authorized operational modules, student directory lookups (non-financial), course schedules, and institutional workflows. Never disclose financial totals or private payment data.',
+      'User is GENERAL STAFF. Focus strictly on authorized operational workflows, course catalog information, non-financial student directory assistance, and portal navigation. Never disclose financial totals, private payment ledgers, or staff salaries.',
     STUDENT:
-      'User is a STUDENT. STRICT SECURITY RULE: Only discuss THIS student’s own payment schedule, own outstanding fee balance, own payment status, and how to print their own approved receipts. NEVER reference or speculate about any other student.',
+      'User is a STUDENT. STRICT SECURITY RULE: Discuss ONLY THIS student’s own profile, own enrolled courses, own attendance record, own fee installments, own Chapa/manual payment status, own approved receipts, study plans, and exam prep tips. NEVER reference, compare, or speculate about any other student or institute-wide totals.',
   };
 
-  const systemInstruction = `You are "AI PORTAL ASSISTANT", the official multi-turn help and analytics assistant for ${safeTenantName} (powered by ZACMA Multi-Tenant SaaS).
+  const systemInstruction = `You are "ZACMA AI ASSISTANT", the centralized role-isolated AI intelligence engine for ${safeTenantName}.
 
-TENANT ISOLATION BOUNDARY (ABSOLUTE):
-- Active Training Institute: ${safeTenantName} (Tenant ID: ${safeTenantId})
-- You MUST ONLY answer using records belonging to ${safeTenantName} provided in the Authorized Live Context below.
-- NEVER reference, compare, or reveal data belonging to any other training institute or tenant on the platform.
+VERIFIED SECURITY BOUNDARY (ENFORCED SERVER-SIDE):
+- Verified Identity: ${authDecision.verifiedName.slice(0, 80)} (UID: ${authDecision.verifiedUid})
+- Verified Role Scope: ${verifiedRole}
+- Verified Tenant Boundary: ${safeTenantName} (Tenant ID: ${safeTenantId})
+- Active Portal Module: ${safeModule}
+- Role Policy: ${rolePolicy[verifiedRole]}
 
-AUTHENTICATED USER:
-- Name: ${String(userName || 'Authorized User').slice(0, 80)}
-- Verified Role: ${role}
-- Policy: ${rolePolicy[role]}
+ABSOLUTE SECURITY, ISOLATION & APPROVAL RULES (NEVER VIOLATE):
+1. STRICT ISOLATION: Answer ONLY using records present in the Sanitized Authorized Context below. If the user asks for data outside their verified role or tenant (e.g. another student, another institute, restricted financials, HR salaries, Super Admin data), politely decline and explain that access is restricted to authorized roles.
+2. ACCOUNTING ACCURACY: ONLY APPROVED payments count as official revenue or reduce student balances. Pending payments never count as paid. Respect the institute's configured currency (default ETB).
+3. ZERO FABRICATION: Never invent figures, student IDs, receipt numbers, or database records. If a metric is absent from the context, state clearly that it is not available in the current authorized view.
+4. HUMAN-IN-THE-LOOP APPROVAL: You are strictly read-only. You NEVER automatically send SMS/emails, approve payments, alter balances, modify records, or change roles. Whenever drafting an SMS, email, announcement, reminder, exam, lesson plan, course outline, or job description, clearly label it as a **Draft Ready for Review & Manual Approval**.
+5. ZERO SECRET DISCLOSURE: Never reveal passwords, API keys, tokens, environment variables, or encrypted ID files.
+6. FORMAT: Be concise, structured with clean Markdown headings/bullets/tables where helpful, accurate, and directly actionable inside the active module (${safeModule}).
 
-ABSOLUTE SECURITY & ACCOUNTING RULES (NEVER VIOLATE):
-1. Respect the institute's configured currency (default Ethiopian Birr / ETB).
-2. ONLY APPROVED payments count as official revenue or reduce student balances. Pending payments never count as paid.
-3. NEVER invent payment figures, receipt numbers, student IDs, or balances. If a specific figure is not in the Authorized Live Context below, clearly state that it is not available in your current view.
-4. NEVER claim to approve payments, modify accounting records, create users, or change permissions. You are strictly read-only; guide the authorized user on where to click and confirm manually.
-5. NEVER reveal passwords, API keys, service-role secrets, or private records belonging to another student or another institute.
-6. Maintain continuity across the multi-turn conversation. Keep responses concise, structured with clean bullet points when helpful, accurate, and directly actionable inside the portal.
-
-OFFICIAL SYSTEM KNOWLEDGE BASE:
+OFFICIAL KNOWLEDGE CONTEXT:
 ${knowledgeText}
 
-AUTHORIZED LIVE CONTEXT FOR THIS ${role} SESSION AT ${safeTenantName} (JSON):
-${JSON.stringify(context || {}, null, 2).slice(0, 12000)}`;
+SANITIZED AUTHORIZED LIVE CONTEXT FOR ${verifiedRole} (${safeTenantId}) (JSON):
+${JSON.stringify(authDecision.sanitizedContext || {}, null, 2).slice(0, 14000)}`;
 
-  const primaryStandardModel = getAiModelName();
+  const configuredDefault =
+    modelOverride === 'gemini-3.1-flash-lite' || modelOverride === 'gemini-4-hydrogen'
+      ? modelOverride
+      : getAiModelName() === 'gemini-3.1-flash-lite'
+      ? 'gemini-3.1-flash-lite'
+      : 'gemini-4-hydrogen';
+
   const candidateModels =
     mode === 'fast'
-      ? Array.from(
-          new Set(['gemini-3.1-flash-lite', primaryStandardModel, 'gemini-flash-latest', 'gemini-2.5-flash'])
-        )
-      : Array.from(new Set([primaryStandardModel, 'gemini-flash-latest', 'gemini-2.5-flash']));
+      ? Array.from(new Set(['gemini-3.1-flash-lite', configuredDefault]))
+      : Array.from(new Set([configuredDefault, 'gemini-3.1-flash-lite']));
 
   return {
     ok: true,
     data: {
       ai,
-      trimmedMessage: message.trim().slice(0, 2000),
+      trimmedMessage: message.trim().slice(0, 3000),
       systemInstruction,
       history: normalizeChatHistory(history),
       candidateModels,
+      verifiedRole,
+      verifiedTenantId: safeTenantId,
+      verifiedUid: authDecision.verifiedUid,
+      strippedKeys: authDecision.strippedKeys,
     },
   };
 }
@@ -422,13 +464,25 @@ function formatAiUpstreamError(rawErr: string): string {
   return rawErr;
 }
 
-export async function handleAiChat(payload: AiChatPayload): Promise<HandlerResult> {
-  const prepared = prepareAiChat(payload);
+export async function handleAiChat(
+  payload: AiChatPayload,
+  authHeader?: string
+): Promise<HandlerResult> {
+  const prepared = await prepareAiChat(payload, authHeader);
   if (!prepared.ok) {
     return prepared.error;
   }
 
-  const { ai, trimmedMessage, systemInstruction, history, candidateModels } = prepared.data;
+  const {
+    ai,
+    trimmedMessage,
+    systemInstruction,
+    history,
+    candidateModels,
+    verifiedRole,
+    verifiedTenantId,
+    strippedKeys,
+  } = prepared.data;
   let lastError: unknown = null;
 
   for (let modelIdx = 0; modelIdx < candidateModels.length; modelIdx++) {
@@ -458,11 +512,23 @@ export async function handleAiChat(payload: AiChatPayload): Promise<HandlerResul
             body: { error: 'AI service returned an empty response.' },
           };
         }
+        const promptTokens = response.usageMetadata?.promptTokenCount ?? Math.ceil((systemInstruction.length + trimmedMessage.length) / 4);
+        const outputTokens = response.usageMetadata?.candidatesTokenCount ?? Math.ceil(reply.length / 4);
+        const totalTokens = response.usageMetadata?.totalTokenCount ?? promptTokens + outputTokens;
         return {
           status: 200,
           body: {
             reply,
             model: activeModel,
+            verifiedRole,
+            verifiedTenantId,
+            strippedContextKeysCount: strippedKeys.length,
+            usage: {
+              promptTokens,
+              outputTokens,
+              totalTokens,
+              estimatedCostUsd: estimateAiCostUsd(activeModel, promptTokens, outputTokens),
+            },
             timestamp: new Date().toISOString(),
           },
         };
@@ -507,17 +573,39 @@ export async function handleAiChatStream(
   payload: AiChatPayload,
   callbacks: {
     onDelta: (delta: string) => void;
-    onDone: (meta: { model: string; timestamp: string }) => void;
+    onDone: (meta: {
+      model: string;
+      timestamp: string;
+      verifiedRole: AiRoleScope;
+      verifiedTenantId: string;
+      strippedContextKeysCount: number;
+      usage: {
+        promptTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        estimatedCostUsd: number;
+      };
+    }) => void;
     onError: (status: number, body: Record<string, unknown>) => void;
-  }
+  },
+  authHeader?: string
 ): Promise<void> {
-  const prepared = prepareAiChat(payload);
+  const prepared = await prepareAiChat(payload, authHeader);
   if (!prepared.ok) {
     callbacks.onError(prepared.error.status, prepared.error.body);
     return;
   }
 
-  const { ai, trimmedMessage, systemInstruction, history, candidateModels } = prepared.data;
+  const {
+    ai,
+    trimmedMessage,
+    systemInstruction,
+    history,
+    candidateModels,
+    verifiedRole,
+    verifiedTenantId,
+    strippedKeys,
+  } = prepared.data;
   let lastError: unknown = null;
 
   for (let modelIdx = 0; modelIdx < candidateModels.length; modelIdx++) {
@@ -525,6 +613,8 @@ export async function handleAiChatStream(
     const hasNextModel = modelIdx < candidateModels.length - 1;
     let shouldTryFallbackModel = false;
     let emittedAnyChunk = false;
+    let totalChars = 0;
+    let finalUsage: { promptTokens?: number; outputTokens?: number; totalTokens?: number } = {};
 
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -543,9 +633,17 @@ export async function handleAiChatStream(
         });
         for await (const chunk of stream) {
           const c = chunk as GenerateContentResponse;
+          if (c.usageMetadata) {
+            finalUsage = {
+              promptTokens: c.usageMetadata.promptTokenCount ?? finalUsage.promptTokens,
+              outputTokens: c.usageMetadata.candidatesTokenCount ?? finalUsage.outputTokens,
+              totalTokens: c.usageMetadata.totalTokenCount ?? finalUsage.totalTokens,
+            };
+          }
           const delta = c.text;
           if (delta) {
             emittedAnyChunk = true;
+            totalChars += delta.length;
             callbacks.onDelta(delta);
           }
         }
@@ -553,9 +651,22 @@ export async function handleAiChatStream(
           callbacks.onError(502, { error: 'AI service returned an empty response.' });
           return;
         }
+        const promptTokens =
+          finalUsage.promptTokens ?? Math.ceil((systemInstruction.length + trimmedMessage.length) / 4);
+        const outputTokens = finalUsage.outputTokens ?? Math.ceil(totalChars / 4);
+        const totalTokens = finalUsage.totalTokens ?? promptTokens + outputTokens;
         callbacks.onDone({
           model: activeModel,
           timestamp: new Date().toISOString(),
+          verifiedRole,
+          verifiedTenantId,
+          strippedContextKeysCount: strippedKeys.length,
+          usage: {
+            promptTokens,
+            outputTokens,
+            totalTokens,
+            estimatedCostUsd: estimateAiCostUsd(activeModel, promptTokens, outputTokens),
+          },
         });
         return;
       } catch (error) {
@@ -593,6 +704,31 @@ export async function handleAiChatStream(
     code: 'AI_UPSTREAM_ERROR',
     error: `AI provider request failed: ${formatAiUpstreamError(errMsg)}`,
   });
+}
+
+export async function handleAiSecurityAudit(authHeader?: string): Promise<HandlerResult> {
+  // Require verified Super Admin / Platform Staff caller for running the live audit endpoint
+  const decision = await authorizeAiRequest({
+    authHeader,
+    requestedRole: 'SUPER_ADMIN',
+    isSuperAdminMode: true,
+    message: 'Run platform security isolation verification',
+  });
+  if (!decision.ok) {
+    return {
+      status: decision.status,
+      body: { code: decision.code, error: decision.error },
+    };
+  }
+  const suite = runAiSecurityAuditSuite();
+  return {
+    status: 200,
+    body: {
+      ...suite,
+      verifiedByUid: decision.verifiedUid,
+      verifiedByRole: decision.platformRole || 'SUPER_ADMIN',
+    },
+  };
 }
 
 export async function handleSetupStatus(rootDir: string = process.cwd()): Promise<HandlerResult> {

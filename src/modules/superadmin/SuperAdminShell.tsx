@@ -18,12 +18,15 @@ import {
   Settings,
   Shield,
   ShieldCheck,
+  Sparkles,
   Users,
   X,
 } from 'lucide-react';
 import { usePortal } from '../../context/PortalContext';
 import { PLATFORM_ROLE_LABELS } from '../../lib/saasService';
 import { ZacmaLogo } from '../../components/ZacmaLogo';
+import { ZacmaAiAssistant } from '../../components/ZacmaAiAssistant';
+import { AiWorkspaceView } from '../AiWorkspaceView';
 import { SuperAdminNavSection } from '../../types/zacma';
 import {
   PlatformAnalyticsView,
@@ -69,6 +72,7 @@ export function SuperAdminShell() {
   } = usePortal();
 
   const [activeSection, setActiveSection] = useState<SuperAdminNavSection>('sa_dashboard');
+  const [pendingAiPrompt, setPendingAiPrompt] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const pendingInvoicesCount = useMemo(
@@ -88,6 +92,12 @@ export function SuperAdminShell() {
         label: '1. Platform Dashboard',
         group: 'Platform Overview',
         icon: <LayoutDashboard className="w-4 h-4" />,
+      },
+      {
+        id: 'sa_ai_assistant',
+        label: 'Super Admin AI Assistant',
+        group: 'Platform Overview',
+        icon: <Sparkles className="w-4 h-4" />,
       },
       {
         id: 'sa_add_institute',
@@ -375,12 +385,30 @@ export function SuperAdminShell() {
           {activeSection === 'sa_global_settings' && <GlobalSettingsView />}
           {activeSection === 'sa_notifications' && <NotificationManagementView />}
           {activeSection === 'sa_ai_services' && <AiServicesControlView />}
+          {activeSection === 'sa_ai_assistant' && (
+            <AiWorkspaceView
+              isSuperAdminMode
+              activeModule="sa_dashboard"
+              initialPrompt={pendingAiPrompt}
+              onConsumedInitialPrompt={() => setPendingAiPrompt(null)}
+            />
+          )}
           {activeSection === 'sa_analytics' && <PlatformAnalyticsView />}
           {activeSection === 'sa_audit_logs' && <PlatformAuditLogsView />}
           {activeSection === 'sa_security' && <SecurityAndPermissionsView />}
           {activeSection === 'sa_support' && <SupportAndAssistanceView />}
         </main>
       </div>
+      {activeSection !== 'sa_ai_assistant' && (
+        <ZacmaAiAssistant
+          isSuperAdminMode
+          activeModule={activeSection}
+          onOpenFullWorkspace={(prompt) => {
+            if (prompt) setPendingAiPrompt(prompt);
+            setActiveSection('sa_ai_assistant');
+          }}
+        />
+      )}
     </div>
   );
 }

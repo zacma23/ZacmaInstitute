@@ -852,7 +852,7 @@ service cloud.firestore {
     // ---------------------------------------------------------
     function isValidTenant(data) {
       return data.keys().hasAll(['tenantId', 'name', 'shortName', 'slug', 'businessType', 'email', 'phone', 'country', 'city', 'address', 'primaryColor', 'secondaryColor', 'studentIdPrefix', 'staffIdPrefix', 'receiptPrefix', 'currency', 'timezone', 'academicYear', 'paymentMethods', 'defaultLanguage', 'dateFormat', 'notificationEmailEnabled', 'notificationSmsEnabled', 'notificationWhatsappEnabled', 'emailGatewayStatus', 'smsGatewayStatus', 'whatsappGatewayStatus', 'status', 'planId', 'planCode', 'planName', 'billingCycle', 'monthlyPriceEtb', 'annualPriceEtb', 'studentLimit', 'staffLimit', 'storageLimitMb', 'storageUsedMb', 'aiMonthlyQuota', 'aiRequestsUsed', 'enabledModules', 'primaryAdminName', 'primaryAdminEmail', 'primaryAdminPhone', 'primaryAdminPosition', 'subscriptionStartDate', 'subscriptionExpiresAt', 'createdBy', 'createdByName', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['tenantId', 'name', 'shortName', 'slug', 'businessType', 'email', 'phone', 'country', 'city', 'address', 'website', 'logoUrl', 'primaryColor', 'secondaryColor', 'studentIdPrefix', 'staffIdPrefix', 'receiptPrefix', 'currency', 'timezone', 'academicYear', 'paymentMethods', 'defaultLanguage', 'dateFormat', 'invoiceFooterNote', 'notificationEmailEnabled', 'notificationSmsEnabled', 'notificationWhatsappEnabled', 'emailGatewayStatus', 'smsGatewayStatus', 'whatsappGatewayStatus', 'smsSenderLabel', 'status', 'planId', 'planCode', 'planName', 'billingCycle', 'monthlyPriceEtb', 'annualPriceEtb', 'studentLimit', 'staffLimit', 'storageLimitMb', 'storageUsedMb', 'aiMonthlyQuota', 'aiRequestsUsed', 'enabledModules', 'primaryAdminUid', 'primaryAdminName', 'primaryAdminEmail', 'primaryAdminPhone', 'primaryAdminPosition', 'subscriptionStartDate', 'trialEndsAt', 'subscriptionExpiresAt', 'suspendedReason', 'suspendedAt', 'isDefaultPlatformTenant', 'createdBy', 'createdByName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'name', 'shortName', 'slug', 'businessType', 'email', 'phone', 'country', 'city', 'address', 'website', 'logoUrl', 'primaryColor', 'secondaryColor', 'studentIdPrefix', 'staffIdPrefix', 'receiptPrefix', 'currency', 'timezone', 'academicYear', 'paymentMethods', 'defaultLanguage', 'dateFormat', 'invoiceFooterNote', 'notificationEmailEnabled', 'notificationSmsEnabled', 'notificationWhatsappEnabled', 'emailGatewayStatus', 'smsGatewayStatus', 'whatsappGatewayStatus', 'smsSenderLabel', 'status', 'planId', 'planCode', 'planName', 'billingCycle', 'monthlyPriceEtb', 'annualPriceEtb', 'studentLimit', 'staffLimit', 'storageLimitMb', 'storageUsedMb', 'aiMonthlyQuota', 'aiRequestsUsed', 'aiMonthlyTokenLimit', 'aiDocScanLimit', 'enabledModules', 'primaryAdminUid', 'primaryAdminName', 'primaryAdminEmail', 'primaryAdminPhone', 'primaryAdminPosition', 'subscriptionStartDate', 'trialEndsAt', 'subscriptionExpiresAt', 'suspendedReason', 'suspendedAt', 'isDefaultPlatformTenant', 'createdBy', 'createdByName', 'createdAt', 'updatedAt'])
         && isValidId(data.tenantId)
         && isNonEmptyString(data.name, 140)
         && isNonEmptyString(data.shortName, 40)
@@ -899,6 +899,8 @@ service cloud.firestore {
         && isNonNegativeNumber(data.storageUsedMb)
         && isNonNegativeNumber(data.aiMonthlyQuota)
         && isNonNegativeNumber(data.aiRequestsUsed)
+        && (!('aiMonthlyTokenLimit' in data) || isNonNegativeNumber(data.aiMonthlyTokenLimit))
+        && (!('aiDocScanLimit' in data) || isNonNegativeNumber(data.aiDocScanLimit))
         && isBoundedStringList(data.enabledModules, 20)
         && isOptionalString(data, 'primaryAdminUid', 128)
         && isNonEmptyString(data.primaryAdminName, 120)
@@ -1040,7 +1042,7 @@ service cloud.firestore {
 
     function isValidPlatformGlobalSettings(data) {
       return data.keys().hasAll(['platformName', 'supportEmail', 'supportPhone', 'defaultCurrency', 'defaultLanguage', 'defaultTrialDays', 'gracePeriodDays', 'autoSuspendExpiredDays', 'allowSelfSignupInstitutes', 'enforceSupportSessionReason', 'maxSupportSessionMinutes', 'updatedAt'])
-        && data.keys().hasOnly(['platformName', 'supportEmail', 'supportPhone', 'defaultCurrency', 'defaultLanguage', 'defaultTrialDays', 'gracePeriodDays', 'autoSuspendExpiredDays', 'allowSelfSignupInstitutes', 'enforceSupportSessionReason', 'maxSupportSessionMinutes', 'updatedBy', 'updatedByName', 'updatedAt'])
+        && data.keys().hasOnly(['platformName', 'supportEmail', 'supportPhone', 'defaultCurrency', 'defaultLanguage', 'defaultTrialDays', 'gracePeriodDays', 'autoSuspendExpiredDays', 'allowSelfSignupInstitutes', 'enforceSupportSessionReason', 'maxSupportSessionMinutes', 'defaultAiModel', 'aiMonthlyTokenLimit', 'aiDocScanLimit', 'updatedBy', 'updatedByName', 'updatedAt'])
         && isNonEmptyString(data.platformName, 120)
         && isNonEmptyString(data.supportEmail, 160)
         && isNonEmptyString(data.supportPhone, 30)
@@ -1052,9 +1054,48 @@ service cloud.firestore {
         && data.allowSelfSignupInstitutes is bool
         && data.enforceSupportSessionReason is bool
         && isPositiveNumber(data.maxSupportSessionMinutes) && data.maxSupportSessionMinutes <= 240
+        && (!('defaultAiModel' in data) || data.defaultAiModel in ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'])
+        && (!('aiMonthlyTokenLimit' in data) || isNonNegativeNumber(data.aiMonthlyTokenLimit))
+        && (!('aiDocScanLimit' in data) || isNonNegativeNumber(data.aiDocScanLimit))
         && isOptionalString(data, 'updatedBy', 128)
         && isOptionalString(data, 'updatedByName', 120)
         && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidAiConversation(data) {
+      return data.keys().hasAll(['tenantId', 'ownerUid', 'ownerName', 'roleScope', 'moduleScope', 'title', 'messagesJson', 'messageCount', 'lastMessagePreview', 'modelId', 'totalTokens', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'ownerUid', 'ownerName', 'roleScope', 'moduleScope', 'title', 'messagesJson', 'messageCount', 'lastMessagePreview', 'modelId', 'totalTokens', 'createdAt', 'updatedAt'])
+        && isValidId(data.tenantId)
+        && isNonEmptyString(data.ownerUid, 128)
+        && isNonEmptyString(data.ownerName, 120)
+        && data.roleScope in ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'ACCOUNTANT', 'INSTRUCTOR', 'RECEPTIONIST', 'HR_OFFICER', 'GENERAL_STAFF', 'STUDENT']
+        && isNonEmptyString(data.moduleScope, 60)
+        && isNonEmptyString(data.title, 140)
+        && data.messagesJson is string && data.messagesJson.size() >= 2 && data.messagesJson.size() <= 90000
+        && data.messageCount is int && data.messageCount >= 0 && data.messageCount <= 200
+        && data.lastMessagePreview is string && data.lastMessagePreview.size() <= 200
+        && data.modelId in ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']
+        && isNonNegativeNumber(data.totalTokens)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidAiUsageLog(data) {
+      return data.keys().hasAll(['tenantId', 'userId', 'userName', 'roleScope', 'moduleScope', 'featureType', 'modelId', 'promptTokens', 'outputTokens', 'totalTokens', 'estimatedCostUsd', 'status', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'userId', 'userName', 'roleScope', 'moduleScope', 'featureType', 'modelId', 'promptTokens', 'outputTokens', 'totalTokens', 'estimatedCostUsd', 'status', 'createdAt'])
+        && isValidId(data.tenantId)
+        && isNonEmptyString(data.userId, 128)
+        && isNonEmptyString(data.userName, 120)
+        && isNonEmptyString(data.roleScope, 40)
+        && isNonEmptyString(data.moduleScope, 60)
+        && data.featureType in ['CHAT', 'DOCUMENT_OCR', 'REPORT_GEN', 'DRAFT_GEN', 'SECURITY_AUDIT']
+        && isNonEmptyString(data.modelId, 60)
+        && isNonNegativeNumber(data.promptTokens)
+        && isNonNegativeNumber(data.outputTokens)
+        && isNonNegativeNumber(data.totalTokens)
+        && isNonNegativeNumber(data.estimatedCostUsd)
+        && data.status in ['SUCCESS', 'DENIED', 'ERROR']
+        && isNonEmptyString(data.createdAt, 40);
     }
 
     function isValidSupportTicket(data) {
@@ -1918,6 +1959,53 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidId(ticketId) && isValidSupportTicket(incoming()) && incoming().createdBy == request.auth.uid && (isPlatformStaff() || (isAdmin() && incoming().tenantId == userTenantId()));
       allow update: if isSignedIn() && isValidId(ticketId) && isValidSupportTicket(incoming()) && incoming().tenantId == existing().tenantId && incoming().createdAt == existing().createdAt && (isPlatformSupport() || (isAdmin() && existing().tenantId == userTenantId() && incoming().diff(existing()).affectedKeys().hasOnly(['description', 'priority', 'updatedAt'])));
       allow delete: if isSignedIn() && isValidId(ticketId) && isPlatformSuperAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 43. Private AI Conversations (STRICTLY Owner-Only + Tenant-Isolated — Zero Cross-User Visibility)
+    // ---------------------------------------------------------
+    match /ai_conversations/{convId} {
+      allow get: if isSignedIn() && isValidId(convId)
+        && existing().ownerUid == request.auth.uid
+        && (isPlatformStaff() || existing().tenantId == userTenantId());
+      allow list: if isSignedIn()
+        && existing().ownerUid == request.auth.uid
+        && (isPlatformStaff() || existing().tenantId == userTenantId());
+      allow create: if isSignedIn() && isValidId(convId)
+        && isValidAiConversation(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && (isPlatformStaff() || incoming().tenantId == userTenantId());
+      allow update: if isSignedIn() && isValidId(convId)
+        && isValidAiConversation(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().tenantId == existing().tenantId
+        && incoming().createdAt == existing().createdAt
+        && (isPlatformStaff() || existing().tenantId == userTenantId());
+      allow delete: if isSignedIn() && isValidId(convId)
+        && existing().ownerUid == request.auth.uid
+        && (isPlatformStaff() || existing().tenantId == userTenantId());
+    }
+
+    // ---------------------------------------------------------
+    // 44. AI Usage & Cost Telemetry Logs (Immutable; Owner reads self, Admin reads tenant, Super Admin reads all)
+    // ---------------------------------------------------------
+    match /ai_usage_logs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && (
+        isPlatformStaff() ||
+        (isAdmin() && existing().tenantId == userTenantId()) ||
+        (existing().userId == request.auth.uid && existing().tenantId == userTenantId())
+      );
+      allow list: if isSignedIn() && (
+        isPlatformStaff() ||
+        (isAdmin() && existing().tenantId == userTenantId()) ||
+        (existing().userId == request.auth.uid && existing().tenantId == userTenantId())
+      );
+      allow create: if isSignedIn() && isValidId(logId)
+        && isValidAiUsageLog(incoming())
+        && incoming().userId == request.auth.uid
+        && (isPlatformStaff() || incoming().tenantId == userTenantId());
+      allow update, delete: if false;
     }
   }
 }

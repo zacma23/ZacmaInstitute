@@ -43,6 +43,7 @@ import {
   startSupportAccessSession,
 } from '../lib/saasService';
 import {
+  AiUsageLogRecord,
   AttendanceRecord,
   AuditLog,
   ChapaTransaction,
@@ -150,6 +151,8 @@ interface PortalContextValue {
   allPlatformProfiles: StaffProfile[];
   allPlatformAuditLogs: AuditLog[];
   allPlatformCourses: Course[];
+  allPlatformAiUsageLogs: AiUsageLogRecord[];
+  aiUsageLogs: AiUsageLogRecord[];
 
   sessionWarningOpen: boolean;
   sessionSecondsRemaining: number;
@@ -247,6 +250,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [notificationPrefs, setNotificationPrefs] = useState<NotificationPreference | null>(null);
   const [schemaMigrations, setSchemaMigrations] = useState<SchemaMigration[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [aiUsageLogs, setAiUsageLogs] = useState<AiUsageLogRecord[]>([]);
   const [securityConfig, setSecurityConfig] = useState<SecurityConfig>(DEFAULT_SECURITY_CONFIG);
   const [loginHistory, setLoginHistory] = useState<LoginHistoryRecord[]>([]);
 
@@ -784,6 +788,31 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       }
     );
     unsubs.push(loginHistUnsub);
+
+    // AI Usage & Cost Logs (Platform staff reads all; Institute Admin reads own tenant; other users read strictly own)
+    const aiUsageQuery = isPlatformUser
+      ? collection(db, 'ai_usage_logs')
+      : actualRole === 'ADMIN'
+      ? query(collection(db, 'ai_usage_logs'), where('tenantId', '==', userTenantId))
+      : query(
+          collection(db, 'ai_usage_logs'),
+          where('userId', '==', user.uid),
+          where('tenantId', '==', userTenantId)
+        );
+    const aiUsageUnsub = onSnapshot(
+      aiUsageQuery,
+      (snapshot) => {
+        const rows = snapshot.docs.map(
+          (d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }) as AiUsageLogRecord
+        );
+        rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setAiUsageLogs(rows);
+      },
+      () => {
+        setAiUsageLogs([]);
+      }
+    );
+    unsubs.push(aiUsageUnsub);
 
     // PII-free Messaging Directory (Platform reads all; Institute reads scoped by tenantId)
     const dirQuery = isPlatformUser
@@ -2033,6 +2062,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         allPlatformProfiles: staffProfiles,
         allPlatformAuditLogs: auditLogs,
         allPlatformCourses: courses,
+        allPlatformAiUsageLogs: aiUsageLogs,
+        aiUsageLogs: aiUsageLogs.filter((l) => l.tenantId === activeTenantId),
         sessionWarningOpen,
         sessionSecondsRemaining,
         sessionExpiredNotice,

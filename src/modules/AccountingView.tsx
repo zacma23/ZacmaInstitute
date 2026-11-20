@@ -27,6 +27,7 @@ import {
   exportRowsToCsv,
 } from '../lib/zacmaService';
 import { ConfirmDialog, EmptyState, PaginationBar, StatusLabel } from '../components/PortalUI';
+import { ModuleAiToolbar } from '../components/ModuleAiToolbar';
 import { recordFinancialAdjustment } from '../lib/securityService';
 import {
   addDaysIso,
@@ -334,6 +335,7 @@ export function AccountingView({
 
   return (
     <div className="space-y-6">
+      <ModuleAiToolbar moduleKey="accounting" moduleLabel="Accounting & Financial Ledger" />
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-display font-bold text-slate-900 tracking-tight">

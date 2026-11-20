@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import {
   handleAiChat,
   handleAiChatStream,
+  handleAiSecurityAudit,
   handleCronReminders,
   handleDispatchExternal,
   handleHealth,
@@ -54,7 +55,14 @@ async function createApp() {
   });
 
   app.post('/api/ai/chat', async (req: Request, res: Response) => {
-    const out = await handleAiChat(req.body);
+    const out = await handleAiChat(req.body, req.headers.authorization);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(out.status).json(out.body);
+  });
+
+  app.post('/api/ai/security-audit', async (req: Request, res: Response) => {
+    const out = await handleAiSecurityAudit(req.headers.authorization);
+    res.setHeader('Cache-Control', 'no-store');
     res.status(out.status).json(out.body);
   });
 
@@ -75,25 +83,29 @@ async function createApp() {
       res.flushHeaders?.();
     };
 
-    await handleAiChatStream(req.body, {
-      onDelta: (delta) => {
-        ensureSseHeaders();
-        res.write(`data: ${JSON.stringify({ delta })}\n\n`);
-      },
-      onDone: (meta) => {
-        ensureSseHeaders();
-        res.write(`data: ${JSON.stringify({ done: true, ...meta })}\n\n`);
-        res.end();
-      },
-      onError: (status, body) => {
-        if (!headersSent) {
-          res.status(status).json(body);
-        } else {
-          res.write(`data: ${JSON.stringify({ error: body.error || 'AI stream interrupted' })}\n\n`);
+    await handleAiChatStream(
+      req.body,
+      {
+        onDelta: (delta) => {
+          ensureSseHeaders();
+          res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+        },
+        onDone: (meta) => {
+          ensureSseHeaders();
+          res.write(`data: ${JSON.stringify({ done: true, ...meta })}\n\n`);
           res.end();
-        }
+        },
+        onError: (status, body) => {
+          if (!headersSent) {
+            res.status(status).json(body);
+          } else {
+            res.write(`data: ${JSON.stringify({ error: body.error || 'AI stream interrupted' })}\n\n`);
+            res.end();
+          }
+        },
       },
-    });
+      req.headers.authorization
+    );
   });
 
   app.get('/api/setup/status', async (_req: Request, res: Response) => {

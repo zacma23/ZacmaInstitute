@@ -29,6 +29,7 @@ import {
   sendMultiChannelBroadcast,
 } from '../lib/communicationService';
 import { formatAddisDateTimeDual, formatDualDate, todayAddisIsoDate } from '../lib/ethiopianCalendar';
+import { ModuleAiToolbar } from '../components/ModuleAiToolbar';
 import {
   BroadcastAudience,
   CommunicationEventType,
@@ -529,6 +530,7 @@ export function CommunicationsAdminView({ initialTab = 'overview' }: { initialTa
 
   return (
     <div className="space-y-5">
+      <ModuleAiToolbar moduleKey="communications" moduleLabel="SMS & Campus Communications" />
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>

@@ -776,6 +776,8 @@
         "storageUsedMb": { "type": "number" },
         "aiMonthlyQuota": { "type": "number" },
         "aiRequestsUsed": { "type": "number" },
+        "aiMonthlyTokenLimit": { "type": "number" },
+        "aiDocScanLimit": { "type": "number" },
         "enabledModules": { "type": "array", "description": "Enabled SaaS modules for this institute (<= 20)." },
         "primaryAdminUid": { "type": "string", "maxLength": 128 },
         "primaryAdminName": { "type": "string", "maxLength": 120 },
@@ -950,6 +952,9 @@
         "allowSelfSignupInstitutes": { "type": "boolean" },
         "enforceSupportSessionReason": { "type": "boolean" },
         "maxSupportSessionMinutes": { "type": "number" },
+        "defaultAiModel": { "type": "string", "enum": ["gemini-4-hydrogen", "gemini-3.1-flash-lite"] },
+        "aiMonthlyTokenLimit": { "type": "number" },
+        "aiDocScanLimit": { "type": "number" },
         "updatedBy": { "type": "string", "maxLength": 128 },
         "updatedByName": { "type": "string", "maxLength": 120 },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -976,6 +981,48 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["tenantId", "tenantName", "subject", "category", "priority", "status", "description", "createdBy", "createdByName", "createdAt", "updatedAt"]
+    },
+    "AiConversation": {
+      "title": "AiConversation",
+      "description": "Strictly private per-user AI conversation history isolated by ownerUid and tenantId.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 80 },
+        "ownerUid": { "type": "string", "maxLength": 128 },
+        "ownerName": { "type": "string", "maxLength": 120 },
+        "roleScope": { "type": "string", "enum": ["SUPER_ADMIN", "ADMIN", "MANAGER", "ACCOUNTANT", "INSTRUCTOR", "RECEPTIONIST", "HR_OFFICER", "GENERAL_STAFF", "STUDENT"] },
+        "moduleScope": { "type": "string", "maxLength": 60 },
+        "title": { "type": "string", "maxLength": 140 },
+        "messagesJson": { "type": "string", "maxLength": 90000 },
+        "messageCount": { "type": "number" },
+        "lastMessagePreview": { "type": "string", "maxLength": 200 },
+        "modelId": { "type": "string", "enum": ["gemini-4-hydrogen", "gemini-3.1-flash-lite"] },
+        "totalTokens": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "ownerUid", "ownerName", "roleScope", "moduleScope", "title", "messagesJson", "messageCount", "lastMessagePreview", "modelId", "totalTokens", "createdAt", "updatedAt"]
+    },
+    "AiUsageLog": {
+      "title": "AiUsageLog",
+      "description": "Immutable AI usage, token, and estimated cost audit log scoped by tenant and user.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 80 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userName": { "type": "string", "maxLength": 120 },
+        "roleScope": { "type": "string", "maxLength": 40 },
+        "moduleScope": { "type": "string", "maxLength": 60 },
+        "featureType": { "type": "string", "enum": ["CHAT", "DOCUMENT_OCR", "REPORT_GEN", "DRAFT_GEN", "SECURITY_AUDIT"] },
+        "modelId": { "type": "string", "maxLength": 60 },
+        "promptTokens": { "type": "number" },
+        "outputTokens": { "type": "number" },
+        "totalTokens": { "type": "number" },
+        "estimatedCostUsd": { "type": "number" },
+        "status": { "type": "string", "enum": ["SUCCESS", "DENIED", "ERROR"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "userId", "userName", "roleScope", "moduleScope", "featureType", "modelId", "promptTokens", "outputTokens", "totalTokens", "estimatedCostUsd", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -1021,6 +1068,8 @@
     "/tenant_invitations/{inviteId}": { "schema": { "$ref": "#/entities/TenantInvitation" }, "description": "Secure institute administrator invitations for tenant-bound onboarding." },
     "/support_access_sessions/{sessionId}": { "schema": { "$ref": "#/entities/SupportAccessSession" }, "description": "Authorized, time-limited, audit-logged Super Admin support access sessions." },
     "/platform_settings/{settingId}": { "schema": { "$ref": "#/entities/PlatformGlobalSettings" }, "description": "Global ZACMA SaaS platform defaults and governance settings." },
-    "/support_tickets/{ticketId}": { "schema": { "$ref": "#/entities/SupportTicket" }, "description": "Institute support & assistance tickets tracked by ZACMA Platform Support." }
+    "/support_tickets/{ticketId}": { "schema": { "$ref": "#/entities/SupportTicket" }, "description": "Institute support & assistance tickets tracked by ZACMA Platform Support." },
+    "/ai_conversations/{convId}": { "schema": { "$ref": "#/entities/AiConversation" }, "description": "Strictly private per-user AI conversation history isolated by ownerUid and tenantId." },
+    "/ai_usage_logs/{logId}": { "schema": { "$ref": "#/entities/AiUsageLog" }, "description": "Immutable AI request, token, and cost telemetry logs scoped by tenantId and userId." }
   }
 }

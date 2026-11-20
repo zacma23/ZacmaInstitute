@@ -23,6 +23,7 @@ import { usePortal } from '../context/PortalContext';
 import { Avatar, EmptyState, StatusLabel } from '../components/PortalUI';
 import { ZacmaLogo } from '../components/ZacmaLogo';
 import { DualDateDisplay } from '../components/DualCalendarDatePicker';
+import { ModuleAiToolbar } from '../components/ModuleAiToolbar';
 import { MessagingView } from './MessagingView';
 import { markNotificationRead } from '../lib/zacmaService';
 import { markAllNotificationsRead } from '../lib/communicationService';
@@ -549,6 +550,7 @@ export function StudentPortalView({
           </div>
         ) : (
           <>
+            <ModuleAiToolbar moduleKey="student_portal" moduleLabel="Personal Student AI Tutor" />
             {/* Student Identity Banner */}
             <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-4 min-w-0">

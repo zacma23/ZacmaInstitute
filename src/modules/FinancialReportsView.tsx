@@ -22,6 +22,7 @@ import {
 import { usePortal } from '../context/PortalContext';
 import { DualCalendarDatePicker, DualDateDisplay } from '../components/DualCalendarDatePicker';
 import { EmptyState, PaginationBar } from '../components/PortalUI';
+import { ModuleAiToolbar } from '../components/ModuleAiToolbar';
 import {
   computeInstitutionalFinanceSummary,
   computeStudentFinancialRows,
@@ -433,6 +434,7 @@ export function FinancialReportsView({
 
   return (
     <div className="space-y-6">
+      <ModuleAiToolbar moduleKey="reports" moduleLabel="Executive Reports & AI Analytics" />
       {/* Header + Primary Multi-Sheet Complete Export */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>

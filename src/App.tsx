@@ -29,6 +29,7 @@ import {
   ScanLine,
   ShieldCheck,
   Smartphone,
+  Sparkles,
   UserCog,
   Users,
   X,
@@ -43,6 +44,7 @@ import { StaffQuickSearch } from './components/StaffQuickSearch';
 import { ZacmaAiAssistant } from './components/ZacmaAiAssistant';
 import { ZacmaLogo } from './components/ZacmaLogo';
 import { DashboardView } from './modules/DashboardView';
+import { AiWorkspaceView } from './modules/AiWorkspaceView';
 import { AiRegistrationView } from './modules/AiRegistrationView';
 import { StudentsView } from './modules/StudentsView';
 import { CoursesView } from './modules/CoursesView';
@@ -119,6 +121,7 @@ function PortalShell() {
   } = usePortal();
 
   const [activeTab, setActiveTab] = useState<NavSection>('dashboard');
+  const [pendingAiPrompt, setPendingAiPrompt] = useState<string | null>(null);
   const [reportStatusFilter, setReportStatusFilter] = useState<'ALL' | StudentPaymentCategory>('ALL');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -184,6 +187,12 @@ function PortalShell() {
         id: 'dashboard',
         label: 'Dashboard',
         icon: <LayoutDashboard className="w-4 h-4" />,
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT', 'INSTRUCTOR', 'RECEPTIONIST', 'HR_OFFICER', 'GENERAL_STAFF'],
+      },
+      {
+        id: 'ai_hub',
+        label: 'AI Assistant',
+        icon: <Sparkles className="w-4 h-4" />,
         roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT', 'INSTRUCTOR', 'RECEPTIONIST', 'HR_OFFICER', 'GENERAL_STAFF'],
       },
       {
@@ -395,7 +404,7 @@ function PortalShell() {
     return (
       <>
         <StudentPortalView onOpenReceipt={setActiveReceipt} />
-        <ZacmaAiAssistant />
+        <ZacmaAiAssistant activeModule="student_portal" />
         <SessionTimeoutModal />
         <ReceiptModal receipt={activeReceipt} onClose={() => setActiveReceipt(null)} />
         <ToastContainer toasts={toasts} onDismiss={dismissToast} />
@@ -776,6 +785,13 @@ function PortalShell() {
                   onOpenReports={openReportsWithFilter}
                 />
               )}
+              {activeTab === 'ai_hub' && (
+                <AiWorkspaceView
+                  activeModule="ai_hub"
+                  initialPrompt={pendingAiPrompt}
+                  onConsumedInitialPrompt={() => setPendingAiPrompt(null)}
+                />
+              )}
               {activeTab === 'registrations' && <AiRegistrationView />}
               {activeTab === 'students' && (
                 <StudentsView onOpenAiRegistration={() => setActiveTab('registrations')} />
@@ -1004,7 +1020,15 @@ function PortalShell() {
         </div>
       )}
 
-      <ZacmaAiAssistant />
+      {activeTab !== 'ai_hub' && (
+        <ZacmaAiAssistant
+          activeModule={activeTab}
+          onOpenFullWorkspace={(prompt) => {
+            if (prompt) setPendingAiPrompt(prompt);
+            setActiveTab('ai_hub');
+          }}
+        />
+      )}
       <SessionTimeoutModal />
       <ReceiptModal receipt={activeReceipt} onClose={() => setActiveReceipt(null)} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />

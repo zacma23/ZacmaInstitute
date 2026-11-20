@@ -31,6 +31,7 @@ import {
   Users,
 } from 'lucide-react';
 import { usePortal } from '../../context/PortalContext';
+import { ModuleAiToolbar } from '../../components/ModuleAiToolbar';
 import {
   ALL_SAAS_MODULES,
   createPlatformInvoice,
@@ -194,6 +195,12 @@ export function SuperAdminDashboardView({ onNavigate }: DashboardProps) {
           </button>
         </div>
       </div>
+
+      <ModuleAiToolbar
+        isSuperAdminMode
+        moduleKey="sa_dashboard"
+        moduleLabel="Super Admin Platform Intelligence"
+      />
 
       {/* Primary KPI Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
