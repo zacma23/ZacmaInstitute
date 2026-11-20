@@ -15,11 +15,13 @@ import {
   Database,
   FileSpreadsheet,
   FileText,
+  Globe,
   History,
   LayoutDashboard,
   LogOut,
   Menu,
   MessageSquare,
+  ScanLine,
   ShieldCheck,
   Smartphone,
   UserCog,
@@ -36,6 +38,7 @@ import { StaffQuickSearch } from './components/StaffQuickSearch';
 import { ZacmaAiAssistant } from './components/ZacmaAiAssistant';
 import { ZacmaLogo } from './components/ZacmaLogo';
 import { DashboardView } from './modules/DashboardView';
+import { AiRegistrationView } from './modules/AiRegistrationView';
 import { StudentsView } from './modules/StudentsView';
 import { CoursesView } from './modules/CoursesView';
 import {
@@ -43,6 +46,7 @@ import {
   PaymentsView,
   ReceiptsArchiveView,
 } from './modules/PaymentsAndApprovalsView';
+import { ChapaPaymentsView } from './modules/ChapaPaymentsView';
 import { AccountingView } from './modules/AccountingView';
 import { FinancialReportsView } from './modules/FinancialReportsView';
 import { AttendanceView } from './modules/AttendanceView';
@@ -82,8 +86,10 @@ function PortalShell() {
     authLoading,
     signOutUser,
     students,
+    staffRecords,
     installments,
     payments,
+    chapaTransactions,
     notifications,
     unreadMessagesCount,
     pushToast,
@@ -104,11 +110,25 @@ function PortalShell() {
     setActiveTab('reports');
   };
 
+  const pendingRegistrationsCount = useMemo(() => {
+    const pStu = students.filter((s) => s.registrationStatus === 'PENDING').length;
+    const pStf = staffRecords.filter((s) => s.registrationStatus === 'PENDING').length;
+    return pStu + pStf;
+  }, [students, staffRecords]);
+
   const pendingApprovalsCount = useMemo(() => {
     const pStu = students.filter((s) => s.registrationStatus === 'PENDING').length;
     const pPay = payments.filter((p) => p.status === 'PENDING').length;
     return pStu + pPay;
   }, [students, payments]);
+
+  const pendingChapaApprovalsCount = useMemo(
+    () =>
+      chapaTransactions.filter(
+        (t) => t.paymentStatus === 'VERIFIED' && t.approvalStatus === 'AWAITING_APPROVAL'
+      ).length,
+    [chapaTransactions]
+  );
 
   const overdueInstallmentsCount = useMemo(() => {
     const today = todayIsoDate();
@@ -124,6 +144,13 @@ function PortalShell() {
         label: 'Dashboard',
         icon: <LayoutDashboard className="w-4 h-4" />,
         roles: ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF'],
+      },
+      {
+        id: 'registrations',
+        label: 'AI Registration & ID',
+        icon: <ScanLine className="w-4 h-4" />,
+        roles: ['ADMIN', 'ACCOUNTANT'],
+        badgeCount: pendingRegistrationsCount,
       },
       {
         id: 'students',
@@ -142,6 +169,13 @@ function PortalShell() {
         label: 'Fees & Payments',
         icon: <CreditCard className="w-4 h-4" />,
         roles: ['ADMIN', 'ACCOUNTANT'],
+      },
+      {
+        id: 'chapa',
+        label: 'Chapa Online Payments',
+        icon: <Globe className="w-4 h-4" />,
+        roles: ['ADMIN', 'ACCOUNTANT'],
+        badgeCount: pendingChapaApprovalsCount,
       },
       {
         id: 'reminders',
@@ -231,7 +265,9 @@ function PortalShell() {
     effectiveRole,
     profile?.allowedModules,
     profile?.canExportReports,
+    pendingRegistrationsCount,
     pendingApprovalsCount,
+    pendingChapaApprovalsCount,
     overdueInstallmentsCount,
     unreadMessagesCount,
   ]);
@@ -525,9 +561,18 @@ function PortalShell() {
               onOpenReports={openReportsWithFilter}
             />
           )}
-          {activeTab === 'students' && <StudentsView />}
+          {activeTab === 'registrations' && <AiRegistrationView />}
+          {activeTab === 'students' && (
+            <StudentsView onOpenAiRegistration={() => setActiveTab('registrations')} />
+          )}
           {activeTab === 'courses' && <CoursesView />}
           {activeTab === 'payments' && <PaymentsView onOpenReceipt={setActiveReceipt} />}
+          {activeTab === 'chapa' && (
+            <ChapaPaymentsView
+              onOpenReceipt={setActiveReceipt}
+              onOpenReports={() => openReportsWithFilter('ALL')}
+            />
+          )}
           {activeTab === 'reminders' && <RemindersAndPreferencesView />}
           {activeTab === 'approvals' && <ApprovalsQueueView />}
           {activeTab === 'receipts' && <ReceiptsArchiveView onOpenReceipt={setActiveReceipt} />}
@@ -654,7 +699,8 @@ function PortalShell() {
                   const toneColor =
                     n.type === 'OVERDUE_BALANCE' ||
                     n.type === 'REJECTED_PAYMENT' ||
-                    n.type === 'PAYMENT_OVERDUE'
+                    n.type === 'PAYMENT_OVERDUE' ||
+                    n.type === 'CHAPA_PAYMENT_REJECTED'
                       ? 'text-[#E51B23]'
                       : n.type === 'DEADLINE_APPROACHING'
                       ? 'text-amber-700'
@@ -677,6 +723,18 @@ function PortalShell() {
                           type="button"
                           onClick={() => {
                             if (
+                              n.actionSection === 'registrations' ||
+                              n.type === 'PENDING_STAFF_REGISTRATION' ||
+                              n.type === 'STAFF_REGISTRATION_APPROVED' ||
+                              n.type === 'ID_VERIFICATION_FLAGGED'
+                            ) {
+                              setActiveTab('registrations');
+                            } else if (
+                              n.actionSection === 'chapa' ||
+                              n.type.startsWith('CHAPA_')
+                            ) {
+                              setActiveTab('chapa');
+                            } else if (
                               n.actionSection === 'messages' ||
                               n.type === 'NEW_INTERNAL_MESSAGE' ||
                               n.type === 'INSTRUCTOR_MESSAGE'

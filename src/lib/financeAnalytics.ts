@@ -1,4 +1,5 @@
 import {
+  ChapaTransaction,
   Course,
   Enrollment,
   Expense,
@@ -564,4 +565,59 @@ export function computePaymentStatusDistribution(
       color: '#E51B23',
     },
   ];
+}
+
+export interface ChapaFinancialSummary {
+  totalTransactionsCount: number;
+  totalVerifiedOnlineAmountEtb: number;
+  verifiedCount: number;
+  totalApprovedOnlineAmountEtb: number;
+  approvedCount: number;
+  pendingAdminApprovalAmountEtb: number;
+  pendingAdminApprovalCount: number;
+  rejectedAmountEtb: number;
+  rejectedCount: number;
+  failedAmountEtb: number;
+  failedCount: number;
+  refundedAmountEtb: number;
+  refundedCount: number;
+  initiatedOrPendingVerifyCount: number;
+}
+
+export function computeChapaFinancialSummary(
+  chapaTransactions: ChapaTransaction[]
+): ChapaFinancialSummary {
+  const sum = (list: ChapaTransaction[]) =>
+    Number(list.reduce((acc, t) => acc + Number(t.amountEtb || 0), 0).toFixed(2));
+
+  const verified = chapaTransactions.filter((t) => t.paymentStatus === 'VERIFIED');
+  const approved = chapaTransactions.filter((t) => t.approvalStatus === 'APPROVED');
+  const pendingApproval = chapaTransactions.filter(
+    (t) => t.paymentStatus === 'VERIFIED' && t.approvalStatus === 'AWAITING_APPROVAL'
+  );
+  const rejected = chapaTransactions.filter((t) => t.approvalStatus === 'REJECTED');
+  const failed = chapaTransactions.filter(
+    (t) => t.paymentStatus === 'FAILED' || t.paymentStatus === 'CANCELLED'
+  );
+  const refunded = chapaTransactions.filter((t) => t.paymentStatus === 'REFUNDED');
+  const inFlight = chapaTransactions.filter(
+    (t) => t.paymentStatus === 'INITIATED' || t.paymentStatus === 'PENDING_VERIFICATION'
+  );
+
+  return {
+    totalTransactionsCount: chapaTransactions.length,
+    totalVerifiedOnlineAmountEtb: sum(verified),
+    verifiedCount: verified.length,
+    totalApprovedOnlineAmountEtb: sum(approved),
+    approvedCount: approved.length,
+    pendingAdminApprovalAmountEtb: sum(pendingApproval),
+    pendingAdminApprovalCount: pendingApproval.length,
+    rejectedAmountEtb: sum(rejected),
+    rejectedCount: rejected.length,
+    failedAmountEtb: sum(failed),
+    failedCount: failed.length,
+    refundedAmountEtb: sum(refunded),
+    refundedCount: refunded.length,
+    initiatedOrPendingVerifyCount: inFlight.length,
+  };
 }

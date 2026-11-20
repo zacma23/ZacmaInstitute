@@ -1,7 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { Calendar, Clock, Edit3, Plus, Search, Users, X } from 'lucide-react';
+import { Calendar, Clock, Edit3, Plus, Search, Sparkles, Users, X } from 'lucide-react';
 import { usePortal } from '../context/PortalContext';
 import { saveCourse } from '../lib/zacmaService';
+import {
+  CANONICAL_ZACMA_COURSES,
+  ensureCanonicalZacmaCourses,
+} from '../lib/registrationService';
 import { EmptyState, TableSkeleton } from '../components/PortalUI';
 import { Course, formatEtb } from '../types/zacma';
 
@@ -19,9 +23,18 @@ export function CoursesView() {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [editingCourse, setEditingCourse] = useState<Course | 'NEW' | null>(null);
+  const [syncingCanonical, setSyncingCanonical] = useState(false);
 
   const isAdmin = effectiveRole === 'ADMIN';
   const isInstructor = effectiveRole === 'INSTRUCTOR';
+
+  const missingCanonicalCount = useMemo(() => {
+    const names = new Set(courses.map((c) => c.name.trim().toLowerCase()));
+    const ids = new Set(courses.map((c) => c.id));
+    return CANONICAL_ZACMA_COURSES.filter(
+      (c) => !ids.has(c.id) && !names.has(c.name.trim().toLowerCase())
+    ).length;
+  }, [courses]);
 
   const categories = useMemo(() => {
     return Array.from(new Set(courses.map((c) => c.category))).sort();
@@ -62,14 +75,51 @@ export function CoursesView() {
           </p>
         </div>
         {isAdmin && (
-          <button
-            type="button"
-            onClick={() => setEditingCourse('NEW')}
-            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors whitespace-nowrap"
-          >
-            <Plus className="w-4 h-4" />
-            Add New Course
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {missingCanonicalCount > 0 && profile && (
+              <button
+                type="button"
+                disabled={syncingCanonical}
+                onClick={async () => {
+                  setSyncingCanonical(true);
+                  try {
+                    const added = await ensureCanonicalZacmaCourses(courses, {
+                      uid: profile.uid,
+                      fullName: profile.fullName,
+                      role: profile.role,
+                    });
+                    pushToast(
+                      'success',
+                      added > 0
+                        ? `Added ${added} missing ZACMA Technology courses to the catalog.`
+                        : 'All 18 canonical ZACMA courses are already active.'
+                    );
+                  } catch (err) {
+                    pushToast(
+                      'error',
+                      err instanceof Error ? err.message : 'Unable to sync ZACMA courses.'
+                    );
+                  } finally {
+                    setSyncingCanonical(false);
+                  }
+                }}
+                className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-[#172DEB] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors whitespace-nowrap disabled:opacity-50"
+              >
+                <Sparkles className="w-4 h-4" />
+                {syncingCanonical
+                  ? 'Syncing...'
+                  : `Sync ${missingCanonicalCount} ZACMA Course${missingCanonicalCount > 1 ? 's' : ''}`}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setEditingCourse('NEW')}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors whitespace-nowrap"
+            >
+              <Plus className="w-4 h-4" />
+              Add New Course
+            </button>
+          </div>
         )}
       </div>
 

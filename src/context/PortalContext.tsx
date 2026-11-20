@@ -33,9 +33,11 @@ import {
   DEFAULT_SECURITY_CONFIG,
   recordLoginHistoryEvent,
 } from '../lib/securityService';
+import { ensureCanonicalZacmaCourses } from '../lib/registrationService';
 import {
   AttendanceRecord,
   AuditLog,
+  ChapaTransaction,
   CommunicationPolicy,
   Conversation,
   Course,
@@ -44,6 +46,7 @@ import {
   Expense,
   ExpenseCategory,
   FinancialAdjustment,
+  IdentityDocumentRecord,
   LoginHistoryRecord,
   NavSection,
   NotificationChannelRule,
@@ -60,7 +63,9 @@ import {
   SmsLog,
   SmsSystemConfig,
   SmsTemplate,
+  StaffCompensation,
   StaffProfile,
+  StaffRecord,
   Student,
   todayIsoDate,
   addDaysIso,
@@ -106,12 +111,16 @@ interface PortalContextValue {
 
   roles: RoleRecord[];
   staffProfiles: StaffProfile[];
+  staffRecords: StaffRecord[];
+  staffCompensations: StaffCompensation[];
+  identityDocuments: IdentityDocumentRecord[];
   courses: Course[];
   paymentPlans: PaymentPlan[];
   students: Student[];
   enrollments: Enrollment[];
   installments: PaymentInstallment[];
   payments: Payment[];
+  chapaTransactions: ChapaTransaction[];
   receipts: Receipt[];
   expenseCategories: ExpenseCategory[];
   expenses: Expense[];
@@ -157,12 +166,16 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
   const [roles, setRoles] = useState<RoleRecord[]>([]);
   const [staffProfiles, setStaffProfiles] = useState<StaffProfile[]>([]);
+  const [staffRecords, setStaffRecords] = useState<StaffRecord[]>([]);
+  const [staffCompensations, setStaffCompensations] = useState<StaffCompensation[]>([]);
+  const [identityDocuments, setIdentityDocuments] = useState<IdentityDocumentRecord[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [paymentPlans, setPaymentPlans] = useState<PaymentPlan[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [installments, setInstallments] = useState<PaymentInstallment[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [chapaTransactions, setChapaTransactions] = useState<ChapaTransaction[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -204,6 +217,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [runningReminders, setRunningReminders] = useState(false);
   const autoReminderRanRef = useRef(false);
   const commDefaultsEnsuredRef = useRef(false);
+  const canonicalCoursesSyncedRef = useRef(false);
   const sessionEstablishedUidRef = useRef<string | null>(null);
   const activeSessionIdRef = useRef<string | undefined>(undefined);
   const lastActivityRef = useRef<number>(Date.now());
@@ -556,6 +570,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       setExpenses([]);
       setAttendance([]);
       setStaffProfiles([profile]);
+      setStaffRecords([]);
+      setStaffCompensations([]);
+      setIdentityDocuments([]);
       setAuditLogs([]);
       setSchemaMigrations([]);
       setSmsLogs([]);
@@ -635,6 +652,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         subscribeOwn<Payment>('payments', setPayments, (a, b) =>
           b.createdAt.localeCompare(a.createdAt)
         );
+        subscribeOwn<ChapaTransaction>('chapa_transactions', setChapaTransactions, (a, b) =>
+          b.createdAt.localeCompare(a.createdAt)
+        );
         subscribeOwn<Receipt>('receipts', setReceipts, (a, b) =>
           b.issuedAt.localeCompare(a.issuedAt)
         );
@@ -653,6 +673,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         setEnrollments([]);
         setInstallments([]);
         setPayments([]);
+        setChapaTransactions([]);
         setReceipts([]);
         setAttendance([]);
         setFinancialAdjustments([]);
@@ -706,6 +727,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       subscribe<Payment>('payments', setPayments, (a, b) =>
         b.createdAt.localeCompare(a.createdAt)
       );
+      subscribe<ChapaTransaction>('chapa_transactions', setChapaTransactions, (a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
       subscribe<Receipt>('receipts', setReceipts, (a, b) =>
         b.issuedAt.localeCompare(a.issuedAt)
       );
@@ -755,6 +779,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       setPaymentPlans([]);
       setInstallments([]);
       setPayments([]);
+      setChapaTransactions([]);
       setReceipts([]);
       setExpenseCategories([]);
       setExpenses([]);
@@ -762,10 +787,19 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       setSmsLogs([]);
     }
 
-    // Admin-only collections (Staff directory PII + Immutable Audit Trail + Schema Migrations)
+    // Admin-only collections (Staff directory PII, Encrypted ID Vault, Salary Isolation, Audit Trail)
     if (actualRole === 'ADMIN') {
       subscribe<StaffProfile>('profiles', setStaffProfiles, (a, b) =>
         a.fullName.localeCompare(b.fullName)
+      );
+      subscribe<StaffRecord>('staff_records', setStaffRecords, (a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
+      subscribe<StaffCompensation>('staff_compensation', setStaffCompensations, (a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt)
+      );
+      subscribe<IdentityDocumentRecord>('identity_documents', setIdentityDocuments, (a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
       );
       subscribe<AuditLog>('audit_logs', setAuditLogs, (a, b) =>
         b.createdAt.localeCompare(a.createdAt)
@@ -773,8 +807,35 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       subscribe<SchemaMigration>('schema_migrations', setSchemaMigrations, (a, b) =>
         a.version.localeCompare(b.version)
       );
+    } else if (actualRole === 'ACCOUNTANT') {
+      setStaffProfiles([profile]);
+      setStaffCompensations([]);
+      setIdentityDocuments([]);
+      setAuditLogs([]);
+      setSchemaMigrations([]);
+      const ownStaffQuery = query(
+        collection(db, 'staff_records'),
+        where('registeredBy', '==', user.uid)
+      );
+      const ownStaffUnsub = onSnapshot(
+        ownStaffQuery,
+        (snapshot) => {
+          const rows = snapshot.docs.map(
+            (d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }) as StaffRecord
+          );
+          rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          setStaffRecords(rows);
+        },
+        () => {
+          // Non-fatal fallback
+        }
+      );
+      unsubs.push(ownStaffUnsub);
     } else {
       setStaffProfiles([profile]);
+      setStaffRecords([]);
+      setStaffCompensations([]);
+      setIdentityDocuments([]);
       setAuditLogs([]);
       setSchemaMigrations([]);
     }
@@ -817,6 +878,23 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       );
     }
   }, [dataLoading, profile, actualRole, staffProfiles, students]);
+
+  // Idempotently ensure all 18 canonical ZACMA Technology courses exist in the dynamic catalog
+  useEffect(() => {
+    if (
+      !dataLoading &&
+      !canonicalCoursesSyncedRef.current &&
+      profile &&
+      actualRole === 'ADMIN'
+    ) {
+      canonicalCoursesSyncedRef.current = true;
+      void ensureCanonicalZacmaCourses(courses, {
+        uid: profile.uid,
+        fullName: profile.fullName,
+        role: actualRole,
+      });
+    }
+  }, [dataLoading, profile, actualRole, courses]);
 
   const unreadMessagesCount = useMemo(() => {
     if (!user) return 0;
@@ -904,7 +982,25 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             .map((s) => `${s.fullName} (${s.studentCode})`)
             .join(', '),
           targetRole: 'ADMIN',
+          actionSection: 'registrations',
           entityType: 'student',
+          isRead: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      const pendingStaff = staffRecords.filter((s) => s.registrationStatus === 'PENDING');
+      if (pendingStaff.length > 0) {
+        liveAlerts.push({
+          id: 'live_pending_staff_reg',
+          type: 'PENDING_STAFF_REGISTRATION',
+          title: `${pendingStaff.length} Pending Staff Registration${pendingStaff.length > 1 ? 's' : ''}`,
+          message: pendingStaff
+            .slice(0, 3)
+            .map((s) => `${s.fullName} (${s.staffCode} · ${s.jobPosition})`)
+            .join(', '),
+          targetRole: 'ADMIN',
+          actionSection: 'registrations',
+          entityType: 'staff',
           isRead: false,
           createdAt: new Date().toISOString(),
         });
@@ -919,6 +1015,23 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
           message: `ETB ${sum.toLocaleString()} awaiting verification before official ledger posting.`,
           targetRole: 'ADMIN',
           entityType: 'payment',
+          isRead: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      const verifiedChapaPending = chapaTransactions.filter(
+        (t) => t.paymentStatus === 'VERIFIED' && t.approvalStatus === 'AWAITING_APPROVAL'
+      );
+      if (verifiedChapaPending.length > 0) {
+        const sum = verifiedChapaPending.reduce((acc, t) => acc + t.amountEtb, 0);
+        liveAlerts.push({
+          id: 'live_pending_chapa',
+          type: 'CHAPA_PAYMENT_VERIFIED',
+          title: `${verifiedChapaPending.length} Verified Chapa Payment${verifiedChapaPending.length > 1 ? 's' : ''} Awaiting Approval`,
+          message: `ETB ${sum.toLocaleString()} verified via Chapa API — review and approve in Chapa Online Payments.`,
+          targetRole: 'ADMIN',
+          actionSection: 'chapa',
+          entityType: 'chapa_transaction',
           isRead: false,
           createdAt: new Date().toISOString(),
         });
@@ -996,7 +1109,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     profile?.linkedStudentId,
     user,
     students,
+    staffRecords,
     payments,
+    chapaTransactions,
     installments,
     persistedNotifications,
   ]);
@@ -1497,12 +1612,16 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         continueSession,
         roles,
         staffProfiles,
+        staffRecords,
+        staffCompensations,
+        identityDocuments,
         courses,
         paymentPlans,
         students,
         enrollments,
         installments,
         payments,
+        chapaTransactions,
         receipts,
         expenseCategories,
         expenses,

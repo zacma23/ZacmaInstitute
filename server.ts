@@ -14,7 +14,7 @@ import {
   handleSmsSend,
   handleSmsStatus,
   recordScheduledHeartbeat,
-  ServerSmsProvider,
+  type ServerSmsProvider,
 } from './server/handlers.ts';
 import {
   handleLoginAttempt,
@@ -23,6 +23,13 @@ import {
   handleSessionRefresh,
   handleSessionValidate,
 } from './server/sessionManager.ts';
+import {
+  handleChapaInitialize,
+  handleChapaStatus,
+  handleChapaVerify,
+  handleChapaWebhook,
+} from './server/chapaGateway.ts';
+import { handleScanIdDocument } from './server/idScanner.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,7 +38,14 @@ const PORT = Number(process.env.PORT || 3000);
 
 async function createApp() {
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
+  app.use(
+    express.json({
+      limit: '15mb',
+      verify: (req, _res, buf) => {
+        (req as Request & { rawBody?: string }).rawBody = buf.toString('utf8');
+      },
+    })
+  );
 
   app.get('/api/health', (_req: Request, res: Response) => {
     const out = handleHealth();
@@ -40,6 +54,12 @@ async function createApp() {
 
   app.post('/api/ai/chat', async (req: Request, res: Response) => {
     const out = await handleAiChat(req.body);
+    res.status(out.status).json(out.body);
+  });
+
+  app.post('/api/ai/scan-id', async (req: Request, res: Response) => {
+    const out = await handleScanIdDocument(req.body || {});
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.status(out.status).json(out.body);
   });
 
@@ -154,6 +174,63 @@ async function createApp() {
   app.post('/api/session/login-attempt', (req: Request, res: Response) => {
     const out = handleLoginAttempt(req.body || {});
     applySessionHeaders(res);
+    res.status(out.status).json(out.body);
+  });
+
+  // Chapa Payment Gateway Server-Side Proxy & Webhook Routes
+  const getOrigin = (req: Request): string => {
+    const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
+    const host = (req.headers['x-forwarded-host'] as string) || req.get('host') || `localhost:${PORT}`;
+    return `${proto}://${host}`;
+  };
+
+  app.get('/api/chapa/status', (req: Request, res: Response) => {
+    const out = handleChapaStatus(getOrigin(req));
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(out.status).json(out.body);
+  });
+
+  app.post('/api/chapa/initialize', async (req: Request, res: Response) => {
+    const out = await handleChapaInitialize(req.body || {}, getOrigin(req));
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(out.status).json(out.body);
+  });
+
+  app.get('/api/chapa/verify', async (req: Request, res: Response) => {
+    const txRef = typeof req.query.tx_ref === 'string'
+      ? req.query.tx_ref
+      : typeof req.query.txRef === 'string'
+      ? req.query.txRef
+      : undefined;
+    const expectedAmountRaw = req.query.expectedAmountEtb ?? req.query.amount;
+    const expectedAmountEtb =
+      typeof expectedAmountRaw === 'string' && expectedAmountRaw !== ''
+        ? Number(expectedAmountRaw)
+        : undefined;
+    const expectedCurrency =
+      typeof req.query.expectedCurrency === 'string'
+        ? req.query.expectedCurrency
+        : typeof req.query.currency === 'string'
+        ? req.query.currency
+        : undefined;
+    const out = await handleChapaVerify({ txRef, expectedAmountEtb, expectedCurrency });
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(out.status).json(out.body);
+  });
+
+  app.post('/api/chapa/verify', async (req: Request, res: Response) => {
+    const out = await handleChapaVerify(req.body || {});
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(out.status).json(out.body);
+  });
+
+  app.post('/api/chapa/webhook', async (req: Request, res: Response) => {
+    const rawBody = (req as Request & { rawBody?: string }).rawBody ?? JSON.stringify(req.body || {});
+    const out = await handleChapaWebhook(
+      rawBody,
+      req.headers as Record<string, string | string[] | undefined>
+    );
+    res.setHeader('Cache-Control', 'no-store');
     res.status(out.status).json(out.body);
   });
 

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Content, GenerateContentResponse, GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { type Content, type GenerateContentResponse, GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { buildKnowledgeContextForRole } from '../src/lib/knowledgeBase.ts';
 import type { RoleCode } from '../src/types/zacma.ts';
 

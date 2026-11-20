@@ -1,4 +1,4 @@
-import { RoleCode } from '../types/zacma';
+import type { RoleCode } from '../types/zacma.ts';
 
 export interface KnowledgeArticle {
   id: string;

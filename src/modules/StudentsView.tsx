@@ -3,6 +3,7 @@ import {
   Check,
   Eye,
   Plus,
+  ScanLine,
   Search,
   Upload,
   X,
@@ -35,7 +36,11 @@ import {
 
 const PAGE_SIZE = 8;
 
-export function StudentsView() {
+export function StudentsView({
+  onOpenAiRegistration,
+}: {
+  onOpenAiRegistration?: () => void;
+} = {}) {
   const {
     profile,
     effectiveRole,
@@ -131,14 +136,26 @@ export function StudentsView() {
           </p>
         </div>
         {canRegister && (
-          <button
-            type="button"
-            onClick={() => setShowRegisterModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors whitespace-nowrap"
-          >
-            <Plus className="w-4 h-4" />
-            Register New Student
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {onOpenAiRegistration && (
+              <button
+                type="button"
+                onClick={onOpenAiRegistration}
+                className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-[#172DEB] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors whitespace-nowrap"
+              >
+                <ScanLine className="w-4 h-4" />
+                AI Scan ID &amp; Register
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowRegisterModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors whitespace-nowrap"
+            >
+              <Plus className="w-4 h-4" />
+              Register New Student
+            </button>
+          </div>
         )}
       </div>
 

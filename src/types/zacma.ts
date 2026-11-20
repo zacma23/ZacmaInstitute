@@ -12,13 +12,16 @@ export type RegistrationStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type EnrollmentStatus = 'PENDING' | 'ACTIVE' | 'COMPLETED' | 'REJECTED';
 export type InstallmentStatus = 'UNPAID' | 'PARTIAL' | 'PAID' | 'OVERDUE';
 export type PaymentStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
-export type PaymentMethod = 'Cash' | 'CBE Birr' | 'Telebirr' | 'Bank Transfer' | 'Check';
+export type PaymentMethod = 'Cash' | 'CBE Birr' | 'Telebirr' | 'Bank Transfer' | 'Check' | 'Chapa';
 export type AttendanceStatus = 'PRESENT' | 'ABSENT' | 'LATE' | 'EXCUSED';
 
 export type NotificationType =
   | 'DEADLINE_APPROACHING'
   | 'OVERDUE_BALANCE'
   | 'PENDING_REGISTRATION'
+  | 'PENDING_STAFF_REGISTRATION'
+  | 'STAFF_REGISTRATION_APPROVED'
+  | 'ID_VERIFICATION_FLAGGED'
   | 'PENDING_PAYMENT'
   | 'REJECTED_PAYMENT'
   | 'UPCOMING_PAYMENT'
@@ -34,13 +37,19 @@ export type NotificationType =
   | 'INSTRUCTOR_MESSAGE'
   | 'ADMIN_ANNOUNCEMENT'
   | 'SCHEDULE_CHANGE'
-  | 'NEW_INTERNAL_MESSAGE';
+  | 'NEW_INTERNAL_MESSAGE'
+  | 'CHAPA_PAYMENT_LINK'
+  | 'CHAPA_PAYMENT_VERIFIED'
+  | 'CHAPA_PAYMENT_APPROVED'
+  | 'CHAPA_PAYMENT_REJECTED';
 
 export type NavSection =
   | 'dashboard'
+  | 'registrations'
   | 'students'
   | 'courses'
   | 'payments'
+  | 'chapa'
   | 'reminders'
   | 'approvals'
   | 'receipts'
@@ -52,6 +61,19 @@ export type NavSection =
   | 'staff'
   | 'audit'
   | 'setup';
+
+export type IdDocumentType =
+  | 'ETHIOPIAN_FAYDA_ID'
+  | 'NATIONAL_ID'
+  | 'PASSPORT'
+  | 'DRIVING_LICENCE';
+
+export type IdVerificationStatus =
+  | 'UNVERIFIED'
+  | 'PENDING_REVIEW'
+  | 'VERIFIED'
+  | 'FLAGGED'
+  | 'REJECTED';
 
 export type StudentPaymentCategory = 'FULLY_PAID' | 'PARTIALLY_PAID' | 'UNPAID' | 'OVERDUE';
 
@@ -161,11 +183,22 @@ export interface Student {
   id: string;
   studentCode: string;
   fullName: string;
-  gender: 'Male' | 'Female';
+  gender: 'Male' | 'Female' | 'Unspecified';
   phone: string;
   altPhone?: string;
+  email?: string;
+  dateOfBirth?: string;
+  nationality?: string;
   address: string;
   photoUrl?: string;
+  idDocumentType?: IdDocumentType;
+  idNumberMasked?: string;
+  idNumberHash?: string;
+  idExpiryDate?: string;
+  idVaultRefId?: string;
+  idVerificationStatus?: IdVerificationStatus;
+  ocrConfidenceSummary?: string;
+  initialPaymentEtb?: number;
   courseId: string;
   courseName: string;
   enrollmentDate: string;
@@ -182,6 +215,93 @@ export interface Student {
   rejectionReason?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface StaffRecord {
+  id: string;
+  staffCode: string;
+  fullName: string;
+  address: string;
+  phone: string;
+  email: string;
+  dateOfBirth: string;
+  nationality: string;
+  gender?: 'Male' | 'Female' | 'Unspecified';
+  idDocumentType: IdDocumentType;
+  idNumberMasked?: string;
+  idNumberHash?: string;
+  idExpiryDate?: string;
+  idVaultRefId?: string;
+  idVerificationStatus?: IdVerificationStatus;
+  department: string;
+  jobPosition: string;
+  portalRole: Exclude<RoleCode, 'STUDENT'>;
+  employmentStartDate: string;
+  employmentStartDateEthiopian?: string;
+  photoUrl?: string;
+  linkedProfileUid?: string;
+  registrationStatus: RegistrationStatus;
+  registeredBy: string;
+  registeredByName?: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  rejectionReason?: string;
+  ocrConfidenceSummary?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StaffCompensation {
+  id: string;
+  staffId: string;
+  staffCode: string;
+  salaryEtb: number;
+  payFrequency: 'MONTHLY' | 'BIWEEKLY' | 'CONTRACT';
+  notes?: string;
+  updatedBy: string;
+  updatedByName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IdentityDocumentRecord {
+  id: string;
+  subjectType: 'STUDENT' | 'STAFF';
+  subjectId: string;
+  subjectCode: string;
+  subjectName: string;
+  documentType: IdDocumentType;
+  idNumberMasked: string;
+  idNumberHash: string;
+  documentExpiryDate?: string;
+  encryptionAlg: 'AES-GCM-256';
+  encryptionIv: string;
+  encryptedPayload: string;
+  fileMimeType?: string;
+  hasFrontImage: boolean;
+  hasBackImage: boolean;
+  ocrConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'MANUAL';
+  ocrWarnings?: string[];
+  verificationStatus: 'PENDING_REVIEW' | 'VERIFIED' | 'FLAGGED' | 'REJECTED';
+  verificationNotes?: string;
+  uploadedBy: string;
+  uploadedByName: string;
+  verifiedBy?: string;
+  verifiedByName?: string;
+  verifiedAt?: string;
+  retentionDeleteAfter?: string;
+  isRedacted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DecryptedIdVaultPayload {
+  documentNumber: string;
+  drivingLicenceNumber?: string;
+  frontDataUrl?: string;
+  backDataUrl?: string;
+  extractedSummary?: string;
 }
 
 export interface Enrollment {
@@ -244,6 +364,59 @@ export interface Payment {
   receiptId?: string;
   receiptNumber?: string;
   notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ChapaPaymentStatus =
+  | 'INITIATED'
+  | 'PENDING_VERIFICATION'
+  | 'VERIFIED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'REFUNDED';
+
+export type ChapaApprovalStatus = 'AWAITING_APPROVAL' | 'APPROVED' | 'REJECTED';
+
+export type ChapaTransactionSource = 'STUDENT_PORTAL' | 'PAYMENT_LINK';
+
+export interface ChapaTransaction {
+  id: string;
+  txRef: string;
+  studentId: string;
+  studentCode: string;
+  studentName: string;
+  studentPhone?: string;
+  studentEmail?: string;
+  courseId: string;
+  courseName: string;
+  enrollmentId: string;
+  amountEtb: number;
+  currency: 'ETB';
+  paymentMethod: 'Chapa';
+  source: ChapaTransactionSource;
+  checkoutUrl?: string;
+  paymentStatus: ChapaPaymentStatus;
+  approvalStatus: ChapaApprovalStatus;
+  chapaReference?: string;
+  chapaChannel?: string;
+  chapaFeeEtb?: number;
+  verificationProof?: string;
+  verificationSummary?: string;
+  paymentDate?: string;
+  verifiedAt?: string;
+  expiresAt?: string;
+  createdBy: string;
+  createdByName: string;
+  createdByRole: RoleCode;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: string;
+  approvalNotes?: string;
+  rejectionReason?: string;
+  paymentId?: string;
+  receiptId?: string;
+  receiptNumber?: string;
   createdAt: string;
   updatedAt: string;
 }

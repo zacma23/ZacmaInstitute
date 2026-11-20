@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { handleSmsBalance, ServerSmsProvider } from '../../server/handlers.ts';
+import { handleSmsBalance, type ServerSmsProvider } from '../../server/handlers.ts';
 
 type VercelReq = IncomingMessage & {
   query?: Record<string, string | string[] | undefined>;

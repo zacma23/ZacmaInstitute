@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Download,
   FileSpreadsheet,
+  Globe,
   Plus,
   RotateCcw,
   Search,
@@ -55,6 +56,7 @@ export function AccountingView({
     enrollments,
     installments,
     payments,
+    chapaTransactions,
     expenses,
     expenseCategories,
     financialAdjustments,
@@ -131,6 +133,7 @@ export function AccountingView({
 
     return {
       approvedIncome,
+      grossApprovedIncome,
       refundsAndReversals,
       totalExpenses,
       netCashFlow: approvedIncome - totalExpenses,
@@ -138,6 +141,46 @@ export function AccountingView({
       outstandingTotal,
     };
   }, [periodApprovedPayments, periodAdjustments, periodExpenses, payments, enrollments, period, today]);
+
+  // Separate Chapa online payment reconciliation breakdown (period-scoped)
+  const chapaReconciliation = useMemo(() => {
+    const periodChapa = chapaTransactions.filter((t) =>
+      inPeriod((t.paymentDate || t.createdAt || '').slice(0, 10))
+    );
+    const verifiedList = periodChapa.filter((t) => t.paymentStatus === 'VERIFIED');
+    const approvedList = periodChapa.filter((t) => t.approvalStatus === 'APPROVED');
+    const pendingApprovalList = periodChapa.filter(
+      (t) => t.paymentStatus === 'VERIFIED' && t.approvalStatus === 'AWAITING_APPROVAL'
+    );
+    const rejectedList = periodChapa.filter((t) => t.approvalStatus === 'REJECTED');
+    const failedList = periodChapa.filter(
+      (t) => t.paymentStatus === 'FAILED' || t.paymentStatus === 'CANCELLED'
+    );
+    const refundedList = periodChapa.filter((t) => t.paymentStatus === 'REFUNDED');
+    const sum = (arr: typeof periodChapa) =>
+      Number(arr.reduce((acc, item) => acc + item.amountEtb, 0).toFixed(2));
+    return {
+      totalCount: periodChapa.length,
+      verifiedAmount: sum(verifiedList),
+      verifiedCount: verifiedList.length,
+      approvedAmount: sum(approvedList),
+      approvedCount: approvedList.length,
+      pendingApprovalAmount: sum(pendingApprovalList),
+      pendingApprovalCount: pendingApprovalList.length,
+      rejectedAmount: sum(rejectedList),
+      rejectedCount: rejectedList.length,
+      failedAmount: sum(failedList),
+      failedCount: failedList.length,
+      refundedAmount: sum(refundedList),
+      refundedCount: refundedList.length,
+      manualApprovedAmount: Number(
+        periodApprovedPayments
+          .filter((p) => p.paymentMethod !== 'Chapa')
+          .reduce((acc, p) => acc + p.amountEtb, 0)
+          .toFixed(2)
+      ),
+    };
+  }, [chapaTransactions, periodApprovedPayments, period, today]);
 
   const cashFlowLedger = useMemo(() => {
     const rows: Array<{
@@ -368,6 +411,86 @@ export function AccountingView({
           <p className="text-[11px] text-slate-500 mt-1">
             Across {outstandingEnrollments.length} active balances
           </p>
+        </div>
+      </div>
+
+      {/* Chapa Online Payments Reconciliation Breakdown */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Globe className="w-4 h-4 text-[#172DEB]" />
+            <h2 className="text-sm font-bold text-slate-900">
+              Chapa Online Payment Gateway Reconciliation ({period.toLowerCase()})
+            </h2>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            Only Admin-approved Chapa transactions are posted into Official Approved Income.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+          <div className="bg-[#F5F7FC] border border-slate-200 rounded-lg p-3">
+            <p className="text-[11px] font-medium text-slate-500">Verified Online</p>
+            <p className="text-sm font-mono font-bold text-[#172DEB] tabular-nums mt-1">
+              {formatEtbCompact(chapaReconciliation.verifiedAmount)}
+            </p>
+            <p className="text-[10px] text-slate-500 mt-0.5 tabular-nums">
+              {chapaReconciliation.verifiedCount} tx
+            </p>
+          </div>
+          <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-3">
+            <p className="text-[11px] font-medium text-emerald-800">Approved Online</p>
+            <p className="text-sm font-mono font-bold text-emerald-700 tabular-nums mt-1">
+              {formatEtbCompact(chapaReconciliation.approvedAmount)}
+            </p>
+            <p className="text-[10px] text-emerald-700/80 mt-0.5 tabular-nums">
+              {chapaReconciliation.approvedCount} posted
+            </p>
+          </div>
+          <div className="bg-amber-50/70 border border-amber-200 rounded-lg p-3">
+            <p className="text-[11px] font-medium text-amber-800">Pending Approval</p>
+            <p className="text-sm font-mono font-bold text-amber-700 tabular-nums mt-1">
+              {formatEtbCompact(chapaReconciliation.pendingApprovalAmount)}
+            </p>
+            <p className="text-[10px] text-amber-700/80 mt-0.5 tabular-nums">
+              {chapaReconciliation.pendingApprovalCount} awaiting
+            </p>
+          </div>
+          <div className="bg-red-50/60 border border-red-200 rounded-lg p-3">
+            <p className="text-[11px] font-medium text-red-800">Rejected Online</p>
+            <p className="text-sm font-mono font-bold text-[#E51B23] tabular-nums mt-1">
+              {formatEtbCompact(chapaReconciliation.rejectedAmount)}
+            </p>
+            <p className="text-[10px] text-red-700/80 mt-0.5 tabular-nums">
+              {chapaReconciliation.rejectedCount} rejected
+            </p>
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+            <p className="text-[11px] font-medium text-slate-600">Failed / Cancelled</p>
+            <p className="text-sm font-mono font-bold text-slate-700 tabular-nums mt-1">
+              {formatEtbCompact(chapaReconciliation.failedAmount)}
+            </p>
+            <p className="text-[10px] text-slate-500 mt-0.5 tabular-nums">
+              {chapaReconciliation.failedCount} failed
+            </p>
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+            <p className="text-[11px] font-medium text-slate-600">Refunded Online</p>
+            <p className="text-sm font-mono font-bold text-slate-700 tabular-nums mt-1">
+              {formatEtbCompact(chapaReconciliation.refundedAmount)}
+            </p>
+            <p className="text-[10px] text-slate-500 mt-0.5 tabular-nums">
+              {chapaReconciliation.refundedCount} refunded
+            </p>
+          </div>
+          <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 text-white">
+            <p className="text-[11px] font-medium text-slate-300">Total Approved Fees</p>
+            <p className="text-sm font-mono font-bold text-white tabular-nums mt-1">
+              {formatEtbCompact(summary.grossApprovedIncome)}
+            </p>
+            <p className="text-[10px] text-slate-400 mt-0.5 tabular-nums">
+              Manual {formatEtbCompact(chapaReconciliation.manualApprovedAmount)}
+            </p>
+          </div>
         </div>
       </div>
 

@@ -2,35 +2,73 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig, type ResolvedConfig } from 'vite';
+
+const rootDir = import.meta.dirname;
 
 export default defineConfig(() => {
+  let resolvedOutDir = path.resolve(rootDir, 'dist');
+
   return {
+    base: '/',
     plugins: [
       react(),
       tailwindcss(),
-      // Copies src/assets into dist/ so root-relative URLs like
-      // "/src/assets/images/..." (e.g. generate_image output) still resolve
-      // in production builds. Do not remove.
+      // Copies src/assets into the resolved production outDir (dist/src/assets)
+      // so root-relative URLs like "/src/assets/images/..." resolve in Vercel builds.
       {
         name: 'copy-unbundled-src-assets',
         apply: 'build',
+        configResolved(config: ResolvedConfig): void {
+          resolvedOutDir = path.resolve(rootDir, config.build.outDir || 'dist');
+        },
         closeBundle(error?: Error): void {
           if (error) {
             return;
           }
-          const distDir = path.resolve(__dirname, 'dist');
-          const srcAssets = path.resolve(__dirname, 'src/assets');
-          const distAssets = path.resolve(distDir, 'src/assets');
-          if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
-            fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
+          const srcAssets = path.resolve(rootDir, 'src/assets');
+          const distAssets = path.resolve(resolvedOutDir, 'src/assets');
+          if (fs.existsSync(resolvedOutDir) && fs.existsSync(srcAssets)) {
+            fs.mkdirSync(distAssets, { recursive: true });
+            fs.cpSync(srcAssets, distAssets, { recursive: true, force: true });
           }
         },
       },
     ],
+    build: {
+      outDir: 'dist',
+      emptyOutDir: true,
+      sourcemap: false,
+      target: 'es2022',
+      chunkSizeWarningLimit: 1200,
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            groups: [
+              {
+                name: 'vendor-react',
+                test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+              },
+              {
+                name: 'vendor-firebase',
+                test: /node_modules[\\/](firebase|@firebase)[\\/]/,
+              },
+              {
+                name: 'vendor-charts',
+                test: /node_modules[\\/](recharts|d3-|victory-vendor)[\\/]/,
+              },
+              {
+                name: 'vendor-xlsx',
+                test: /node_modules[\\/]xlsx[\\/]/,
+              },
+            ],
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': rootDir,
       },
     },
     server: {

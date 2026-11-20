@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import {
+  ChapaTransaction,
   Course,
   Expense,
   FinancialAdjustment,
@@ -25,7 +26,15 @@ export type ExcelReportKey =
   | 'COURSE_BASED'
   | 'COMPLETE_FINANCIAL'
   | 'INSTITUTIONAL_EXPENSES'
-  | 'INSTITUTIONAL_ACCOUNTING';
+  | 'INSTITUTIONAL_ACCOUNTING'
+  | 'CHAPA_ALL'
+  | 'CHAPA_VERIFIED'
+  | 'CHAPA_PENDING_APPROVAL'
+  | 'CHAPA_APPROVED'
+  | 'CHAPA_REJECTED'
+  | 'CHAPA_FAILED'
+  | 'CHAPA_MONTHLY'
+  | 'CHAPA_STUDENT_HISTORY';
 
 export interface ExcelExportFilters {
   registrationDateFrom?: string;
@@ -42,6 +51,7 @@ export interface ExcelExportFilters {
 export interface ExcelExportContext {
   studentRows: StudentFinancialRow[];
   payments: Payment[];
+  chapaTransactions?: ChapaTransaction[];
   expenses: Expense[];
   adjustments: FinancialAdjustment[];
   courses: Course[];
@@ -166,9 +176,27 @@ export function applyExportFilters(ctx: ExcelExportContext) {
     return true;
   });
 
+  const filteredChapa = (ctx.chapaTransactions || []).filter((t) => {
+    const txDate = (t.paymentDate || t.createdAt || '').slice(0, 10);
+    if (f.courseId && f.courseId !== 'ALL' && t.courseId !== f.courseId) return false;
+    if (f.paymentDateFrom && txDate < f.paymentDateFrom) return false;
+    if (f.paymentDateTo && txDate > f.paymentDateTo) return false;
+    if (f.specificMonth && !txDate.startsWith(f.specificMonth)) return false;
+    if (
+      (f.instructorId && f.instructorId !== 'ALL') ||
+      (f.paymentStatus && f.paymentStatus !== 'ALL') ||
+      f.registrationDateFrom ||
+      f.registrationDateTo
+    ) {
+      if (!matchedStudentIds.has(t.studentId)) return false;
+    }
+    return true;
+  });
+
   return {
     filteredStudents,
     filteredPayments,
+    filteredChapa,
     filteredExpenses,
     filteredAdjustments,
   };
@@ -447,8 +475,13 @@ export function generateExcelWorkbook(
 ): ExcelWorkbookResult {
   const today = todayAddisIsoDate();
   const filterSummary = describeActiveFilters(ctx.filters, ctx.courses);
-  const { filteredStudents, filteredPayments, filteredExpenses, filteredAdjustments } =
-    applyExportFilters(ctx);
+  const {
+    filteredStudents,
+    filteredPayments,
+    filteredChapa,
+    filteredExpenses,
+    filteredAdjustments,
+  } = applyExportFilters(ctx);
 
   const wb = XLSX.utils.book_new();
   wb.Props = {
@@ -835,6 +868,264 @@ export function generateExcelWorkbook(
       })
     );
     rowCount = approvedPayments.length + filteredAdjustments.length + filteredExpenses.length;
+  } else if (
+    reportKey === 'CHAPA_ALL' ||
+    reportKey === 'CHAPA_VERIFIED' ||
+    reportKey === 'CHAPA_PENDING_APPROVAL' ||
+    reportKey === 'CHAPA_APPROVED' ||
+    reportKey === 'CHAPA_REJECTED' ||
+    reportKey === 'CHAPA_FAILED'
+  ) {
+    const filterMap: Record<
+      | 'CHAPA_ALL'
+      | 'CHAPA_VERIFIED'
+      | 'CHAPA_PENDING_APPROVAL'
+      | 'CHAPA_APPROVED'
+      | 'CHAPA_REJECTED'
+      | 'CHAPA_FAILED',
+      { title: string; slug: string; sheet: string; list: ChapaTransaction[] }
+    > = {
+      CHAPA_ALL: {
+        title: 'All Chapa Online Payment Transactions',
+        slug: 'chapa-all-transactions',
+        sheet: 'All Chapa Transactions',
+        list: filteredChapa,
+      },
+      CHAPA_VERIFIED: {
+        title: 'Chapa Verified Online Transactions',
+        slug: 'chapa-verified-transactions',
+        sheet: 'Verified Chapa',
+        list: filteredChapa.filter((t) => t.paymentStatus === 'VERIFIED'),
+      },
+      CHAPA_PENDING_APPROVAL: {
+        title: 'Chapa Transactions Pending Administrative Approval',
+        slug: 'chapa-pending-approval',
+        sheet: 'Pending Admin Approval',
+        list: filteredChapa.filter(
+          (t) => t.paymentStatus === 'VERIFIED' && t.approvalStatus === 'AWAITING_APPROVAL'
+        ),
+      },
+      CHAPA_APPROVED: {
+        title: 'Chapa Approved Online Payments',
+        slug: 'chapa-approved-payments',
+        sheet: 'Approved Chapa',
+        list: filteredChapa.filter((t) => t.approvalStatus === 'APPROVED'),
+      },
+      CHAPA_REJECTED: {
+        title: 'Chapa Rejected Online Transactions',
+        slug: 'chapa-rejected-transactions',
+        sheet: 'Rejected Chapa',
+        list: filteredChapa.filter((t) => t.approvalStatus === 'REJECTED'),
+      },
+      CHAPA_FAILED: {
+        title: 'Chapa Failed & Cancelled Transactions',
+        slug: 'chapa-failed-transactions',
+        sheet: 'Failed Chapa',
+        list: filteredChapa.filter(
+          (t) => t.paymentStatus === 'FAILED' || t.paymentStatus === 'CANCELLED'
+        ),
+      },
+    };
+    const spec = filterMap[reportKey];
+    reportTitle = spec.title;
+    fileSlug = spec.slug;
+    addSheet(
+      spec.sheet,
+      buildInstitutionalSheet({
+        reportTitle,
+        generatedBy: ctx.generatedBy,
+        filterSummary,
+        headers: [
+          'Transaction ID (tx_ref)',
+          'Chapa Reference',
+          'Student ID',
+          'Student Name',
+          'Course',
+          'Amount (ETB)',
+          'Currency',
+          'Payment Method',
+          'Source',
+          'Gateway Status',
+          'Approval Status',
+          'Receipt Number',
+          'Payment Date (Gregorian)',
+          'Payment Date (Ethiopian)',
+          'Recorded At',
+          'Approved By',
+          'Notes / Rejection Reason',
+        ],
+        rows: spec.list.map((t) => {
+          const payDate = t.paymentDate || t.createdAt.slice(0, 10);
+          return [
+            t.txRef,
+            t.chapaReference || '—',
+            t.studentCode,
+            t.studentName,
+            t.courseName,
+            t.amountEtb,
+            t.currency,
+            t.paymentMethod,
+            t.source === 'PAYMENT_LINK' ? 'Payment Link' : 'Student Portal',
+            t.paymentStatus,
+            t.approvalStatus,
+            t.receiptNumber || '—',
+            payDate,
+            formatEthiopianDate(payDate),
+            t.createdAt,
+            t.approvedByName || '—',
+            t.rejectionReason || t.approvalNotes || '',
+          ];
+        }),
+        currencyCols: [5],
+        sumCols: [5],
+      })
+    );
+    rowCount = spec.list.length;
+  } else if (reportKey === 'CHAPA_MONTHLY') {
+    reportTitle = 'Monthly Chapa Online Collections Report';
+    fileSlug = 'chapa-monthly-online-collections';
+    const monthMap = new Map<
+      string,
+      {
+        txCount: number;
+        verifiedEtb: number;
+        approvedEtb: number;
+        pendingEtb: number;
+        rejectedEtb: number;
+        failedEtb: number;
+      }
+    >();
+    for (const t of filteredChapa) {
+      const mKey = (t.paymentDate || t.createdAt || '').slice(0, 7);
+      if (!/^\d{4}-\d{2}$/.test(mKey)) continue;
+      const cur = monthMap.get(mKey) || {
+        txCount: 0,
+        verifiedEtb: 0,
+        approvedEtb: 0,
+        pendingEtb: 0,
+        rejectedEtb: 0,
+        failedEtb: 0,
+      };
+      cur.txCount += 1;
+      if (t.paymentStatus === 'VERIFIED') cur.verifiedEtb += t.amountEtb;
+      if (t.approvalStatus === 'APPROVED') cur.approvedEtb += t.amountEtb;
+      if (t.paymentStatus === 'VERIFIED' && t.approvalStatus === 'AWAITING_APPROVAL') {
+        cur.pendingEtb += t.amountEtb;
+      }
+      if (t.approvalStatus === 'REJECTED') cur.rejectedEtb += t.amountEtb;
+      if (t.paymentStatus === 'FAILED' || t.paymentStatus === 'CANCELLED') {
+        cur.failedEtb += t.amountEtb;
+      }
+      monthMap.set(mKey, cur);
+    }
+    const monthlyRows = Array.from(monthMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([monthKey, v]) => [
+        monthKey,
+        v.txCount,
+        Number(v.verifiedEtb.toFixed(2)),
+        Number(v.approvedEtb.toFixed(2)),
+        Number(v.pendingEtb.toFixed(2)),
+        Number(v.rejectedEtb.toFixed(2)),
+        Number(v.failedEtb.toFixed(2)),
+      ]);
+    addSheet(
+      'Monthly Chapa Summary',
+      buildInstitutionalSheet({
+        reportTitle,
+        generatedBy: ctx.generatedBy,
+        filterSummary,
+        headers: [
+          'Month (YYYY-MM)',
+          'Total Transactions',
+          'Verified Online (ETB)',
+          'Approved Online (ETB)',
+          'Pending Approval (ETB)',
+          'Rejected (ETB)',
+          'Failed / Cancelled (ETB)',
+        ],
+        rows: monthlyRows,
+        currencyCols: [2, 3, 4, 5, 6],
+        sumCols: [1, 2, 3, 4, 5, 6],
+      })
+    );
+    rowCount = monthlyRows.length;
+  } else if (reportKey === 'CHAPA_STUDENT_HISTORY') {
+    reportTitle = 'Student-Based Chapa Online Payment History';
+    fileSlug = 'chapa-student-payment-history';
+    const byStudent = new Map<
+      string,
+      {
+        studentCode: string;
+        studentName: string;
+        courseName: string;
+        totalAttempts: number;
+        verifiedEtb: number;
+        approvedEtb: number;
+        pendingEtb: number;
+        lastDate: string;
+        receipts: string[];
+      }
+    >();
+    for (const t of filteredChapa) {
+      const cur = byStudent.get(t.studentId) || {
+        studentCode: t.studentCode,
+        studentName: t.studentName,
+        courseName: t.courseName,
+        totalAttempts: 0,
+        verifiedEtb: 0,
+        approvedEtb: 0,
+        pendingEtb: 0,
+        lastDate: '',
+        receipts: [],
+      };
+      cur.totalAttempts += 1;
+      if (t.paymentStatus === 'VERIFIED') cur.verifiedEtb += t.amountEtb;
+      if (t.approvalStatus === 'APPROVED') cur.approvedEtb += t.amountEtb;
+      if (t.paymentStatus === 'VERIFIED' && t.approvalStatus === 'AWAITING_APPROVAL') {
+        cur.pendingEtb += t.amountEtb;
+      }
+      const d = t.paymentDate || t.createdAt.slice(0, 10);
+      if (d > cur.lastDate) cur.lastDate = d;
+      if (t.receiptNumber) cur.receipts.push(t.receiptNumber);
+      byStudent.set(t.studentId, cur);
+    }
+    const stuRows = Array.from(byStudent.values())
+      .sort((a, b) => b.approvedEtb - a.approvedEtb)
+      .map((s) => [
+        s.studentCode,
+        s.studentName,
+        s.courseName,
+        s.totalAttempts,
+        Number(s.verifiedEtb.toFixed(2)),
+        Number(s.approvedEtb.toFixed(2)),
+        Number(s.pendingEtb.toFixed(2)),
+        s.lastDate || '—',
+        s.receipts.join(', ') || '—',
+      ]);
+    addSheet(
+      'Student Online History',
+      buildInstitutionalSheet({
+        reportTitle,
+        generatedBy: ctx.generatedBy,
+        filterSummary,
+        headers: [
+          'Student ID',
+          'Student Name',
+          'Course',
+          'Total Chapa Attempts',
+          'Verified Online (ETB)',
+          'Approved Online (ETB)',
+          'Pending Approval (ETB)',
+          'Last Online Date',
+          'Issued Receipts',
+        ],
+        rows: stuRows,
+        currencyCols: [4, 5, 6],
+        sumCols: [3, 4, 5, 6],
+      })
+    );
+    rowCount = stuRows.length;
   } else {
     // COMPLETE_FINANCIAL — Full Executive Multi-Sheet Institutional Workbook
     reportTitle = 'Complete Institutional Financial Report';
@@ -1085,6 +1376,53 @@ export function generateExcelWorkbook(
       approvedPayments.length +
       filteredAdjustments.length +
       filteredExpenses.length;
+
+    const allChapa = ctx.chapaTransactions || [];
+    if (allChapa.length > 0) {
+      addSheet(
+        'Chapa Online Payments',
+        buildInstitutionalSheet({
+          reportTitle: 'Chapa Online Payment Gateway Ledger',
+          generatedBy: ctx.generatedBy,
+          filterSummary,
+          headers: [
+            'Transaction ID',
+            'Chapa Reference',
+            'Student ID',
+            'Student Name',
+            'Course',
+            'Amount (ETB)',
+            'Currency',
+            'Payment Method',
+            'Source',
+            'Gateway Status',
+            'Approval Status',
+            'Payment Date',
+            'Recorded Date',
+            'Receipt No.',
+          ],
+          rows: allChapa.map((t) => [
+            t.txRef,
+            t.chapaReference || '—',
+            t.studentCode,
+            t.studentName,
+            t.courseName,
+            t.amountEtb,
+            t.currency,
+            t.paymentMethod,
+            t.source === 'PAYMENT_LINK' ? 'Payment Link' : 'Student Portal',
+            t.paymentStatus,
+            t.approvalStatus,
+            t.paymentDate || '—',
+            t.createdAt.slice(0, 10),
+            t.receiptNumber || '—',
+          ]),
+          currencyCols: [5],
+          sumCols: [5],
+        })
+      );
+      rowCount += allChapa.length;
+    }
   }
 
   return {

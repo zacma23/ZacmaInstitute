@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bell,
@@ -7,12 +7,17 @@ import {
   CheckCircle2,
   ClipboardCheck,
   CreditCard,
+  ExternalLink,
   FileText,
+  Globe,
+  Loader2,
   LogOut,
   MessageSquare,
   Printer,
+  RefreshCw,
   RotateCcw,
   ShieldCheck,
+  Wallet,
 } from 'lucide-react';
 import { usePortal } from '../context/PortalContext';
 import { Avatar, EmptyState, StatusLabel } from '../components/PortalUI';
@@ -21,8 +26,15 @@ import { DualDateDisplay } from '../components/DualCalendarDatePicker';
 import { MessagingView } from './MessagingView';
 import { markNotificationRead } from '../lib/zacmaService';
 import { markAllNotificationsRead } from '../lib/communicationService';
+import {
+  ChapaGatewayStatus,
+  fetchChapaGatewayStatus,
+  initializeChapaPayment,
+  verifyChapaTransaction,
+} from '../lib/chapaService';
 import { formatAddisDateTimeDual, todayAddisIsoDate } from '../lib/ethiopianCalendar';
 import {
+  ChapaTransaction,
   formatEtb,
   formatEtbCompact,
   Receipt,
@@ -46,6 +58,7 @@ export function StudentPortalView({
     enrollments,
     installments,
     payments,
+    chapaTransactions,
     receipts,
     attendance,
     financialAdjustments,
@@ -54,9 +67,30 @@ export function StudentPortalView({
     pushToast,
   } = usePortal();
 
-  const [portalTab, setPortalTab] = useState<'overview' | 'attendance' | 'notifications' | 'messages'>('overview');
+  const [portalTab, setPortalTab] = useState<
+    'overview' | 'online_pay' | 'attendance' | 'notifications' | 'messages'
+  >('overview');
   const [notifCategory, setNotifCategory] = useState<'ALL' | 'PAYMENTS' | 'COURSES' | 'ATTENDANCE' | 'MESSAGES' | 'ADMIN'>('ALL');
   const [markingAllRead, setMarkingAllRead] = useState(false);
+
+  // Chapa online payment state
+  const [gatewayStatus, setGatewayStatus] = useState<ChapaGatewayStatus | null>(null);
+  const [selectedEnrollmentId, setSelectedEnrollmentId] = useState<string>('');
+  const [payAmountInput, setPayAmountInput] = useState<string>('');
+  const [payEmailInput, setPayEmailInput] = useState<string>('');
+  const [initiatingChapa, setInitiatingChapa] = useState(false);
+  const [verifyingTxId, setVerifyingTxId] = useState<string | null>(null);
+  const [readyCheckout, setReadyCheckout] = useState<{
+    txRef: string;
+    checkoutUrl: string;
+    amountEtb: number;
+  } | null>(null);
+  const [callbackBanner, setCallbackBanner] = useState<{
+    tone: 'success' | 'info' | 'error';
+    title: string;
+    detail: string;
+  } | null>(null);
+  const handledCallbackRef = useRef<string | null>(null);
 
   const today = todayAddisIsoDate();
   const isAdminPreview = actualRole === 'ADMIN' && previewRole === 'STUDENT';
@@ -90,6 +124,32 @@ export function StudentPortalView({
         .filter((p) => p.studentId === activeStudentId)
         .sort((a, b) => b.paymentDate.localeCompare(a.paymentDate)),
     [payments, activeStudentId]
+  );
+
+  const myChapaTransactions = useMemo(
+    () =>
+      chapaTransactions
+        .filter((t) => t.studentId === activeStudentId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [chapaTransactions, activeStudentId]
+  );
+
+  const activePaymentLinks = useMemo(
+    () =>
+      myChapaTransactions.filter(
+        (t) =>
+          t.source === 'PAYMENT_LINK' &&
+          (t.paymentStatus === 'INITIATED' || t.paymentStatus === 'PENDING_VERIFICATION')
+      ),
+    [myChapaTransactions]
+  );
+
+  const verifiedPendingChapa = useMemo(
+    () =>
+      myChapaTransactions.filter(
+        (t) => t.paymentStatus === 'VERIFIED' && t.approvalStatus === 'AWAITING_APPROVAL'
+      ),
+    [myChapaTransactions]
   );
 
   const myReceipts = useMemo(
@@ -179,6 +239,8 @@ export function StudentPortalView({
       (i) => i.status !== 'PAID' && i.dueDate >= today && i.amountDueEtb > i.amountPaidEtb
     );
     const pendingPayments = myPayments.filter((p) => p.status === 'PENDING');
+    const pendingManualEtb = pendingPayments.reduce((acc, p) => acc + p.amountEtb, 0);
+    const pendingChapaEtb = verifiedPendingChapa.reduce((acc, t) => acc + t.amountEtb, 0);
     return {
       agreedFee,
       approvedPaid,
@@ -186,8 +248,230 @@ export function StudentPortalView({
       overdueInstallments,
       nextUpcoming,
       pendingPayments,
+      pendingApprovalTotalEtb: Number((pendingManualEtb + pendingChapaEtb).toFixed(2)),
+      pendingChapaEtb,
     };
-  }, [myEnrollments, myInstallments, myPayments, today]);
+  }, [myEnrollments, myInstallments, myPayments, verifiedPendingChapa, today]);
+
+  const payableEnrollments = useMemo(
+    () => myEnrollments.filter((e) => e.status !== 'REJECTED' && e.remainingBalanceEtb > 0),
+    [myEnrollments]
+  );
+
+  const activePayEnrollment = useMemo(() => {
+    if (payableEnrollments.length === 0) return myEnrollments[0] || null;
+    return (
+      payableEnrollments.find((e) => e.id === selectedEnrollmentId) || payableEnrollments[0]
+    );
+  }, [payableEnrollments, myEnrollments, selectedEnrollmentId]);
+
+  useEffect(() => {
+    let active = true;
+    fetchChapaGatewayStatus()
+      .then((status) => {
+        if (active) setGatewayStatus(status);
+      })
+      .catch(() => {
+        // Non-blocking status probe
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activePayEnrollment && !payAmountInput && activePayEnrollment.remainingBalanceEtb > 0) {
+      setPayAmountInput(String(activePayEnrollment.remainingBalanceEtb));
+    }
+  }, [activePayEnrollment, payAmountInput]);
+
+  useEffect(() => {
+    if (!payEmailInput && profile?.email) {
+      setPayEmailInput(profile.email);
+    }
+  }, [profile?.email, payEmailInput]);
+
+  // Automatic Chapa callback verification when redirected back with ?chapa_tx_ref=... or ?trx_ref=...
+  useEffect(() => {
+    if (typeof window === 'undefined' || !profile) return;
+    const params = new URLSearchParams(window.location.search);
+    const returnedRef = params.get('chapa_tx_ref') || params.get('trx_ref') || params.get('tx_ref');
+    if (!returnedRef) return;
+
+    setPortalTab('online_pay');
+    if (handledCallbackRef.current === returnedRef) return;
+
+    const matchedTx = myChapaTransactions.find(
+      (t) => t.txRef.toLowerCase() === returnedRef.toLowerCase()
+    );
+    if (!matchedTx) return;
+
+    handledCallbackRef.current = returnedRef;
+
+    const cleanUrl = () => {
+      try {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete('chapa_tx_ref');
+        nextUrl.searchParams.delete('trx_ref');
+        nextUrl.searchParams.delete('tx_ref');
+        nextUrl.searchParams.delete('status');
+        window.history.replaceState(null, '', nextUrl.pathname + nextUrl.search);
+      } catch {
+        // ignore
+      }
+    };
+
+    if (matchedTx.approvalStatus === 'APPROVED') {
+      setCallbackBanner({
+        tone: 'success',
+        title: `Payment Approved — Receipt ${matchedTx.receiptNumber || 'Issued'}`,
+        detail: `Your Chapa payment of ${formatEtb(matchedTx.amountEtb)} (${matchedTx.txRef}) has been approved by ZACMA Technology.`,
+      });
+      cleanUrl();
+      return;
+    }
+
+    setVerifyingTxId(matchedTx.id);
+    verifyChapaTransaction(matchedTx, {
+      uid: profile.uid,
+      fullName: profile.fullName,
+      role: profile.role,
+    })
+      .then((outcome) => {
+        if (outcome.verified) {
+          setCallbackBanner({
+            tone: 'success',
+            title: 'Payment Verified — Awaiting Administrative Approval',
+            detail: `Your payment of ${matchedTx.amountEtb.toLocaleString()} ETB has been received successfully and is awaiting administrative approval.`,
+          });
+          pushToast('success', 'Chapa payment verified! Submitted for ZACMA Admin approval.');
+        } else if (outcome.paymentStatus === 'FAILED' || outcome.paymentStatus === 'CANCELLED') {
+          setCallbackBanner({
+            tone: 'error',
+            title: `Payment ${outcome.paymentStatus}`,
+            detail: outcome.summary,
+          });
+        } else {
+          setCallbackBanner({
+            tone: 'info',
+            title: 'Payment Verification Pending',
+            detail: outcome.summary,
+          });
+        }
+      })
+      .catch((err) => {
+        setCallbackBanner({
+          tone: 'error',
+          title: 'Verification Check Unavailable',
+          detail:
+            err instanceof Error
+              ? err.message
+              : 'Unable to verify payment status with Chapa right now. You may retry verification below.',
+        });
+      })
+      .finally(() => {
+        setVerifyingTxId(null);
+        cleanUrl();
+      });
+  }, [myChapaTransactions, profile, pushToast]);
+
+  const handleStartChapaPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!student || !activePayEnrollment || !profile) return;
+    if (isAdminPreview) {
+      pushToast(
+        'info',
+        'Admin Preview Mode is read-only. Exit preview and use Chapa Online Payments to generate a payment link for this student.'
+      );
+      return;
+    }
+    const amt = Number(payAmountInput);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      pushToast('error', 'Please enter a valid payment amount in ETB.');
+      return;
+    }
+    if (amt > activePayEnrollment.remainingBalanceEtb + 0.01) {
+      pushToast(
+        'error',
+        `Amount cannot exceed your remaining balance of ${formatEtb(activePayEnrollment.remainingBalanceEtb)}.`
+      );
+      return;
+    }
+
+    setInitiatingChapa(true);
+    setReadyCheckout(null);
+    try {
+      const result = await initializeChapaPayment(
+        {
+          student,
+          enrollment: activePayEnrollment,
+          amountEtb: amt,
+          studentEmail: payEmailInput.trim() || undefined,
+          source: 'STUDENT_PORTAL',
+        },
+        {
+          uid: profile.uid,
+          fullName: profile.fullName,
+          role: profile.role,
+        }
+      );
+      setReadyCheckout({
+        txRef: result.transaction.txRef,
+        checkoutUrl: result.checkoutUrl,
+        amountEtb: result.transaction.amountEtb,
+      });
+      pushToast('success', `Chapa checkout initialized (${result.transaction.txRef}).`);
+      // Navigate automatically when running top-level (e.g. Vercel); inside an iframe show launch button cleanly
+      try {
+        if (window.self === window.top) {
+          window.location.assign(result.checkoutUrl);
+        }
+      } catch {
+        // Cross-origin iframe: user can click the prominent "Proceed to Chapa Checkout" link button
+      }
+    } catch (err) {
+      pushToast(
+        'error',
+        err instanceof Error ? err.message : 'Unable to start Chapa online payment.'
+      );
+    } finally {
+      setInitiatingChapa(false);
+    }
+  };
+
+  const handleManualVerifyChapa = async (tx: ChapaTransaction) => {
+    if (!profile) return;
+    setVerifyingTxId(tx.id);
+    try {
+      const outcome = await verifyChapaTransaction(tx, {
+        uid: profile.uid,
+        fullName: profile.fullName,
+        role: profile.role,
+      });
+      if (outcome.verified) {
+        setCallbackBanner({
+          tone: 'success',
+          title: 'Payment Verified — Awaiting Administrative Approval',
+          detail: `Your payment of ${tx.amountEtb.toLocaleString()} ETB has been received successfully and is awaiting administrative approval.`,
+        });
+        pushToast('success', outcome.summary);
+      } else {
+        setCallbackBanner({
+          tone: outcome.paymentStatus === 'FAILED' ? 'error' : 'info',
+          title: `Status: ${outcome.paymentStatus.replace(/_/g, ' ')}`,
+          detail: outcome.summary,
+        });
+        pushToast('info', outcome.summary);
+      }
+    } catch (err) {
+      pushToast(
+        'error',
+        err instanceof Error ? err.message : 'Failed to verify Chapa transaction.'
+      );
+    } finally {
+      setVerifyingTxId(null);
+    }
+  };
 
   const unreadCount = myNotifications.filter((n) => !n.isRead).length;
 
@@ -304,7 +588,7 @@ export function StudentPortalView({
               <button
                 type="button"
                 onClick={() => setPortalTab('overview')}
-                className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg transition ${
+                className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg transition cursor-pointer ${
                   portalTab === 'overview'
                     ? 'bg-[#172DEB] text-white shadow-xs'
                     : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
@@ -312,6 +596,23 @@ export function StudentPortalView({
               >
                 <CreditCard className="w-3.5 h-3.5" />
                 <span>Fees, Schedule &amp; Receipts</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPortalTab('online_pay')}
+                className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                  portalTab === 'online_pay'
+                    ? 'bg-[#172DEB] text-white shadow-xs'
+                    : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span>Online Fee Payment</span>
+                {(activePaymentLinks.length > 0 || verifiedPendingChapa.length > 0) && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded bg-[#E51B23] text-white font-mono text-[10px] font-bold tabular-nums">
+                    {activePaymentLinks.length + verifiedPendingChapa.length}
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -367,6 +668,537 @@ export function StudentPortalView({
             </div>
 
             {portalTab === 'messages' && <MessagingView embedded />}
+
+            {portalTab === 'online_pay' && (
+              <div className="space-y-6">
+                {/* Verification Callback / Status Banner */}
+                {callbackBanner && (
+                  <div
+                    className={`rounded-xl border p-4 flex flex-wrap items-start justify-between gap-3 ${
+                      callbackBanner.tone === 'success'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                        : callbackBanner.tone === 'error'
+                        ? 'bg-red-50 border-red-200 text-red-950'
+                        : 'bg-blue-50 border-blue-200 text-slate-900'
+                    }`}
+                  >
+                    <div className="space-y-1">
+                      <p className="text-sm font-bold">{callbackBanner.title}</p>
+                      <p className="text-xs leading-relaxed opacity-90">{callbackBanner.detail}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCallbackBanner(null)}
+                      className="text-xs font-semibold underline shrink-0"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+
+                {/* Student Fee Overview for Online Checkout */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-[11px] font-medium text-slate-500">Total Course Fee</p>
+                    <p className="text-lg font-mono font-bold text-slate-900 tabular-nums mt-1">
+                      {formatEtbCompact(totals.agreedFee)}
+                    </p>
+                    <p className="text-[11px] text-slate-500 truncate mt-0.5">{student.courseName}</p>
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-[11px] font-medium text-slate-500">Approved Paid</p>
+                    <p className="text-lg font-mono font-bold text-emerald-700 tabular-nums mt-1">
+                      {formatEtbCompact(totals.approvedPaid)}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Official posted receipts</p>
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-[11px] font-medium text-slate-500">Awaiting Approval</p>
+                    <p className="text-lg font-mono font-bold text-amber-700 tabular-nums mt-1">
+                      {formatEtbCompact(totals.pendingApprovalTotalEtb)}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
+                      {verifiedPendingChapa.length} Chapa · {totals.pendingPayments.length} manual
+                    </p>
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-[11px] font-medium text-slate-500">Remaining Balance</p>
+                    <p
+                      className={`text-lg font-mono font-bold tabular-nums mt-1 ${
+                        totals.remaining > 0 ? 'text-[#E51B23]' : 'text-emerald-700'
+                      }`}
+                    >
+                      {formatEtbCompact(totals.remaining)}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      {totals.remaining <= 0 ? 'Fully paid' : 'Payable in ETB'}
+                    </p>
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-xl p-4">
+                    <p className="text-[11px] font-medium text-slate-500">Next Deadline</p>
+                    <div className="mt-1">
+                      {totals.overdueInstallments.length > 0 ? (
+                        <p className="text-sm font-bold text-[#E51B23]">Overdue Now</p>
+                      ) : totals.nextUpcoming ? (
+                        <DualDateDisplay isoDate={totals.nextUpcoming.dueDate} />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">Up to Date</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Staff-Generated Payment Links Ready for Student */}
+                {activePaymentLinks.length > 0 && (
+                  <div className="bg-white border border-blue-200 rounded-xl overflow-hidden">
+                    <div className="px-5 py-3.5 bg-[#F5F7FC] border-b border-blue-200 flex items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-sm font-bold text-slate-900">
+                          Payment Links Sent by ZACMA Finance Office ({activePaymentLinks.length})
+                        </h2>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          An authorized accountant or administrator prepared a direct Chapa checkout link for your tuition.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="divide-y divide-slate-100">
+                      {activePaymentLinks.map((linkTx) => (
+                        <div
+                          key={linkTx.id}
+                          className="p-4 sm:px-5 flex flex-wrap items-center justify-between gap-4"
+                        >
+                          <div className="space-y-0.5 min-w-0">
+                            <p className="text-xs font-mono font-bold text-[#172DEB]">
+                              {linkTx.txRef}
+                            </p>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {formatEtb(linkTx.amountEtb)} — {linkTx.courseName}
+                            </p>
+                            <p className="text-[11px] text-slate-500 tabular-nums">
+                              Issued by {linkTx.createdByName} · {formatAddisDateTimeDual(linkTx.createdAt)}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            {linkTx.checkoutUrl && (
+                              <a
+                                href={linkTx.checkoutUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#172DEB] hover:bg-[#263FEF] rounded-lg"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                Pay Now via Chapa
+                              </a>
+                            )}
+                            <button
+                              type="button"
+                              disabled={verifyingTxId === linkTx.id}
+                              onClick={() => void handleManualVerifyChapa(linkTx)}
+                              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg disabled:opacity-50"
+                            >
+                              {verifyingTxId === linkTx.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <RefreshCw className="w-3.5 h-3.5" />
+                              )}
+                              Verify Status
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Self-Service Online Fee Payment Form */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl overflow-hidden">
+                    <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Wallet className="w-4 h-4 text-[#172DEB]" />
+                        <h2 className="text-sm font-bold text-slate-900">
+                          Pay Training Fee Online with Chapa (ETB)
+                        </h2>
+                      </div>
+                      {gatewayStatus && (
+                        <span
+                          className={`text-[11px] font-mono font-semibold ${
+                            gatewayStatus.configured ? 'text-emerald-700' : 'text-amber-700'
+                          }`}
+                        >
+                          {gatewayStatus.configured
+                            ? `Chapa ${gatewayStatus.mode} Ready`
+                            : 'Gateway Setup Pending'}
+                        </span>
+                      )}
+                    </div>
+
+                    <form onSubmit={(e) => void handleStartChapaPayment(e)} className="p-5 space-y-4">
+                      {gatewayStatus && !gatewayStatus.configured && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3.5 text-xs text-amber-900 leading-relaxed">
+                          <strong>Online Gateway Not Yet Active:</strong> ZACMA Technology IT has not
+                          yet configured live Chapa API credentials on the server. You can still review
+                          your balances and payment history below or pay at the campus Finance Office.
+                        </div>
+                      )}
+
+                      {totals.remaining <= 0 ? (
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-xs text-emerald-900 flex items-start gap-2.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-bold">All Training Fees Fully Settled</p>
+                            <p className="mt-0.5">
+                              Your approved payments cover 100% of your registered course tuition. Download
+                              your official receipts under &ldquo;Fees, Schedule &amp; Receipts&rdquo;.
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {payableEnrollments.length > 1 && (
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                                Select Enrolled Course
+                              </label>
+                              <select
+                                value={activePayEnrollment?.id || ''}
+                                onChange={(e) => {
+                                  setSelectedEnrollmentId(e.target.value);
+                                  const found = payableEnrollments.find(
+                                    (enr) => enr.id === e.target.value
+                                  );
+                                  if (found) setPayAmountInput(String(found.remainingBalanceEtb));
+                                }}
+                                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white"
+                              >
+                                {payableEnrollments.map((enr) => (
+                                  <option key={enr.id} value={enr.id}>
+                                    {enr.courseName} — Remaining {formatEtb(enr.remainingBalanceEtb)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                                Payment Amount (ETB)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min={1}
+                                max={activePayEnrollment?.remainingBalanceEtb || undefined}
+                                required
+                                value={payAmountInput}
+                                onChange={(e) => setPayAmountInput(e.target.value)}
+                                className="w-full px-3 py-2 text-sm font-mono font-semibold border border-slate-300 rounded-lg tabular-nums"
+                                placeholder="Enter ETB amount"
+                              />
+                              <div className="flex flex-wrap items-center gap-2 mt-2">
+                                {activePayEnrollment && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPayAmountInput(String(activePayEnrollment.remainingBalanceEtb))
+                                    }
+                                    className="text-[11px] font-semibold text-[#172DEB] hover:underline"
+                                  >
+                                    Full Balance ({formatEtbCompact(activePayEnrollment.remainingBalanceEtb)})
+                                  </button>
+                                )}
+                                {totals.nextUpcoming && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPayAmountInput(
+                                        String(
+                                          Math.max(
+                                            1,
+                                            Number(
+                                              (
+                                                totals.nextUpcoming!.amountDueEtb -
+                                                totals.nextUpcoming!.amountPaidEtb
+                                              ).toFixed(2)
+                                            )
+                                          )
+                                        )
+                                      )
+                                    }
+                                    className="text-[11px] font-semibold text-slate-600 hover:text-slate-900 hover:underline"
+                                  >
+                                    · Next Installment (
+                                    {formatEtbCompact(
+                                      totals.nextUpcoming.amountDueEtb -
+                                        totals.nextUpcoming.amountPaidEtb
+                                    )}
+                                    )
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                                Receipt Email Address
+                              </label>
+                              <input
+                                type="email"
+                                value={payEmailInput}
+                                onChange={(e) => setPayEmailInput(e.target.value)}
+                                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
+                                placeholder="student@example.com"
+                              />
+                              <p className="text-[11px] text-slate-500 mt-1">
+                                Used by Chapa to send your payment confirmation.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="pt-1 flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-[11px] text-slate-500 max-w-sm leading-relaxed">
+                              Partial and full ETB payments are supported. After Chapa confirms your
+                              payment, ZACMA Administration verifies and issues your official receipt.
+                            </p>
+                            <button
+                              type="submit"
+                              disabled={
+                                initiatingChapa ||
+                                isAdminPreview ||
+                                (gatewayStatus !== null && !gatewayStatus.configured)
+                              }
+                              className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-semibold text-white bg-[#172DEB] hover:bg-[#263FEF] rounded-lg shadow-xs disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                            >
+                              {initiatingChapa ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <CreditCard className="w-4 h-4" />
+                              )}
+                              <span>
+                                {initiatingChapa ? 'Connecting to Chapa...' : 'Pay with Chapa'}
+                              </span>
+                            </button>
+                          </div>
+                        </>
+                      )}
+
+                      {readyCheckout && (
+                        <div className="mt-4 bg-[#F5F7FC] border border-blue-200 rounded-xl p-4 space-y-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-bold text-[#172DEB]">
+                              Chapa Checkout Session Ready
+                            </p>
+                            <span className="text-[11px] font-mono text-slate-600">
+                              {readyCheckout.txRef}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-700">
+                            Amount: <strong className="font-mono">{formatEtb(readyCheckout.amountEtb)}</strong>.
+                            Complete payment securely on Chapa, then return here and click{' '}
+                            <strong>Verify Status</strong> if not redirected automatically.
+                          </p>
+                          <a
+                            href={readyCheckout.checkoutUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#172DEB] hover:bg-[#263FEF] rounded-lg"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            Proceed to Chapa Checkout
+                          </a>
+                        </div>
+                      )}
+                    </form>
+                  </div>
+
+                  {/* Official Workflow Guide */}
+                  <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-5 space-y-3.5">
+                    <h3 className="text-sm font-bold text-slate-900">
+                      How ZACMA Online Fee Approval Works
+                    </h3>
+                    <ol className="space-y-3 text-xs text-slate-600">
+                      <li className="flex gap-2.5">
+                        <span className="w-5 h-5 rounded-md bg-blue-50 text-[#172DEB] font-mono font-bold text-[11px] flex items-center justify-center shrink-0">
+                          1
+                        </span>
+                        <span>
+                          <strong className="text-slate-900">Secure Chapa Checkout:</strong> Pay via
+                          Telebirr, CBE Birr, Bank Transfer, or Ethiopian bank cards in ETB directly
+                          on Chapa&rsquo;s hosted checkout.
+                        </span>
+                      </li>
+                      <li className="flex gap-2.5">
+                        <span className="w-5 h-5 rounded-md bg-blue-50 text-[#172DEB] font-mono font-bold text-[11px] flex items-center justify-center shrink-0">
+                          2
+                        </span>
+                        <span>
+                          <strong className="text-slate-900">Server-Side Verification:</strong> ZACMA
+                          independently verifies the transaction reference and exact ETB amount with
+                          Chapa&rsquo;s official API.
+                        </span>
+                      </li>
+                      <li className="flex gap-2.5">
+                        <span className="w-5 h-5 rounded-md bg-blue-50 text-[#172DEB] font-mono font-bold text-[11px] flex items-center justify-center shrink-0">
+                          3
+                        </span>
+                        <span>
+                          <strong className="text-slate-900">Admin Approval &amp; Official Receipt:</strong>{' '}
+                          Once approved by ZACMA Administration, your remaining balance updates
+                          automatically, an official receipt is issued, and SMS + portal alerts are sent.
+                        </span>
+                      </li>
+                    </ol>
+                  </div>
+                </div>
+
+                {/* Online Chapa Transaction History */}
+                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-2">
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-900">
+                        My Online Chapa Payment History ({myChapaTransactions.length})
+                      </h2>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Real-time verification status, administrative approval decision, and printable official receipts.
+                      </p>
+                    </div>
+                  </div>
+                  {myChapaTransactions.length === 0 ? (
+                    <EmptyState
+                      title="No online Chapa transactions yet"
+                      description="Use the form above or open a Finance Office payment link to settle tuition fees online."
+                    />
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-semibold text-slate-500">
+                            <th className="py-3 px-4">Transaction Ref &amp; Source</th>
+                            <th className="py-3 px-3">Date (Dual)</th>
+                            <th className="py-3 px-3 text-right">Amount (ETB)</th>
+                            <th className="py-3 px-3">Verification</th>
+                            <th className="py-3 px-3">Admin Approval</th>
+                            <th className="py-3 px-4 text-right">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs">
+                          {myChapaTransactions.map((tx) => {
+                            const linkedReceipt = tx.receiptId
+                              ? myReceipts.find((r) => r.id === tx.receiptId)
+                              : undefined;
+                            return (
+                              <tr key={tx.id} className="hover:bg-slate-50/80">
+                                <td className="py-3 px-4">
+                                  <p className="font-mono font-semibold text-slate-900">{tx.txRef}</p>
+                                  <p className="text-[11px] text-slate-500">
+                                    Chapa ·{' '}
+                                    {tx.source === 'PAYMENT_LINK'
+                                      ? 'Finance Payment Link'
+                                      : 'Student Portal'}
+                                    {tx.chapaChannel ? ` (${tx.chapaChannel})` : ''}
+                                  </p>
+                                </td>
+                                <td className="py-3 px-3 whitespace-nowrap text-slate-700">
+                                  <DualDateDisplay
+                                    isoDate={(tx.paymentDate || tx.createdAt).slice(0, 10)}
+                                  />
+                                </td>
+                                <td className="py-3 px-3 text-right font-mono font-bold tabular-nums text-slate-900 whitespace-nowrap">
+                                  {formatEtb(tx.amountEtb)}
+                                </td>
+                                <td className="py-3 px-3 whitespace-nowrap">
+                                  <span
+                                    className={`font-semibold ${
+                                      tx.paymentStatus === 'VERIFIED'
+                                        ? 'text-emerald-700'
+                                        : tx.paymentStatus === 'FAILED' ||
+                                          tx.paymentStatus === 'CANCELLED'
+                                        ? 'text-[#E51B23]'
+                                        : 'text-[#172DEB]'
+                                    }`}
+                                  >
+                                    {tx.paymentStatus.replace(/_/g, ' ')}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3">
+                                  <span
+                                    className={`font-semibold ${
+                                      tx.approvalStatus === 'APPROVED'
+                                        ? 'text-emerald-700'
+                                        : tx.approvalStatus === 'REJECTED'
+                                        ? 'text-[#E51B23]'
+                                        : 'text-amber-700'
+                                    }`}
+                                  >
+                                    {tx.approvalStatus === 'AWAITING_APPROVAL'
+                                      ? 'Awaiting Approval'
+                                      : tx.approvalStatus}
+                                  </span>
+                                  {tx.receiptNumber && (
+                                    <p className="text-[11px] font-mono text-slate-500">
+                                      {tx.receiptNumber}
+                                    </p>
+                                  )}
+                                  {tx.rejectionReason && (
+                                    <p className="text-[11px] text-[#E51B23] mt-0.5 max-w-[200px]">
+                                      {tx.rejectionReason}
+                                    </p>
+                                  )}
+                                </td>
+                                <td className="py-3 px-4 text-right whitespace-nowrap">
+                                  <div className="inline-flex items-center gap-2">
+                                    {(tx.paymentStatus === 'INITIATED' ||
+                                      tx.paymentStatus === 'PENDING_VERIFICATION') &&
+                                      tx.checkoutUrl && (
+                                        <a
+                                          href={tx.checkoutUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#172DEB] hover:bg-[#263FEF] rounded-md"
+                                        >
+                                          <ExternalLink className="w-3 h-3" />
+                                          Pay
+                                        </a>
+                                      )}
+                                    {(tx.paymentStatus === 'INITIATED' ||
+                                      tx.paymentStatus === 'PENDING_VERIFICATION') && (
+                                      <button
+                                        type="button"
+                                        disabled={verifyingTxId === tx.id}
+                                        onClick={() => void handleManualVerifyChapa(tx)}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 border border-slate-300 hover:bg-slate-50 rounded-md disabled:opacity-50"
+                                      >
+                                        {verifyingTxId === tx.id ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                          <RefreshCw className="w-3 h-3" />
+                                        )}
+                                        Verify
+                                      </button>
+                                    )}
+                                    {linkedReceipt && (
+                                      <button
+                                        type="button"
+                                        onClick={() => onOpenReceipt(linkedReceipt)}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#172DEB] bg-blue-50 hover:bg-blue-100 rounded-md"
+                                      >
+                                        <Printer className="w-3 h-3" />
+                                        Receipt
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {portalTab === 'attendance' && (
               <div className="space-y-5">
@@ -542,6 +1374,18 @@ export function StudentPortalView({
                         </div>
 
                         <div className="flex items-center gap-2 shrink-0">
+                          {(n.type === 'CHAPA_PAYMENT_LINK' ||
+                            n.type === 'CHAPA_PAYMENT_VERIFIED' ||
+                            n.type === 'CHAPA_PAYMENT_APPROVED' ||
+                            n.type === 'CHAPA_PAYMENT_REJECTED') && (
+                            <button
+                              type="button"
+                              onClick={() => setPortalTab('online_pay')}
+                              className="px-2.5 py-1 text-[11px] font-semibold rounded-md border border-[#172DEB] text-[#172DEB] hover:bg-blue-50"
+                            >
+                              Online Payment
+                            </button>
+                          )}
                           {(n.actionSection === 'messages' ||
                             n.type === 'NEW_INTERNAL_MESSAGE' ||
                             n.type === 'INSTRUCTOR_MESSAGE') && (
@@ -585,10 +1429,18 @@ export function StudentPortalView({
                       {totals.overdueInstallments.length > 1 ? 's' : ''} Require Attention
                     </p>
                     <p className="text-xs text-red-800 mt-0.5">
-                      Please settle your overdue fee balance at the ZACMA accounts office or via CBE Birr / Telebirr so your enrollment stays in good standing. Only Admin-approved payments clear overdue status.
+                      Please settle your overdue fee balance online via Chapa or at the ZACMA accounts office so your enrollment stays in good standing. Only Admin-approved payments clear overdue status.
                     </p>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setPortalTab('online_pay')}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#172DEB] hover:bg-[#263FEF] rounded-lg shrink-0 cursor-pointer"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  Pay Online with Chapa
+                </button>
               </div>
             )}
 
@@ -610,8 +1462,8 @@ export function StudentPortalView({
                   {formatEtbCompact(totals.approvedPaid)}
                 </p>
                 <p className="text-[11px] text-slate-500 mt-1">
-                  {totals.pendingPayments.length > 0
-                    ? `${totals.pendingPayments.length} submission(s) awaiting approval`
+                  {totals.pendingPayments.length + verifiedPendingChapa.length > 0
+                    ? `${totals.pendingPayments.length + verifiedPendingChapa.length} payment(s) awaiting approval (${formatEtbCompact(totals.pendingApprovalTotalEtb)})`
                     : 'All receipts verified'}
                 </p>
               </div>
@@ -792,9 +1644,22 @@ export function StudentPortalView({
             {/* Payment History & Printable Official Receipts */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
-                  <CreditCard className="w-4 h-4 text-blue-700" />
-                  <h2 className="text-sm font-bold text-slate-900">My Payment History</h2>
+                <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <CreditCard className="w-4 h-4 text-blue-700" />
+                    <h2 className="text-sm font-bold text-slate-900">My Payment History</h2>
+                  </div>
+                  {(totals.remaining > 0 || myChapaTransactions.length > 0) && (
+                    <button
+                      type="button"
+                      onClick={() => setPortalTab('online_pay')}
+                      className="text-xs font-semibold text-[#172DEB] hover:underline"
+                    >
+                      {totals.remaining > 0
+                        ? 'Pay Online via Chapa →'
+                        : `View ${myChapaTransactions.length} Chapa Tx →`}
+                    </button>
+                  )}
                 </div>
                 {myPayments.length === 0 ? (
                   <EmptyState

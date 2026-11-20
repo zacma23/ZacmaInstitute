@@ -8,13 +8,16 @@ import {
   Download,
   FileSpreadsheet,
   Filter,
+  Globe,
   Landmark,
   ReceiptText,
   RotateCcw,
   ShieldAlert,
+  ShieldCheck,
   TrendingUp,
   Users,
   Wallet,
+  XCircle,
 } from 'lucide-react';
 import { usePortal } from '../context/PortalContext';
 import { DualCalendarDatePicker, DualDateDisplay } from '../components/DualCalendarDatePicker';
@@ -45,6 +48,7 @@ const PAYMENT_METHODS: PaymentMethod[] = [
   'Telebirr',
   'Bank Transfer',
   'Check',
+  'Chapa',
 ];
 
 export function FinancialReportsView({
@@ -59,6 +63,7 @@ export function FinancialReportsView({
     enrollments,
     installments,
     payments,
+    chapaTransactions,
     expenses,
     financialAdjustments,
     courses,
@@ -139,13 +144,23 @@ export function FinancialReportsView({
       applyExportFilters({
         studentRows: allStudentRows,
         payments,
+        chapaTransactions,
         expenses,
         adjustments: financialAdjustments,
         courses,
         generatedBy: profile?.fullName || 'ZACMA Admin',
         filters: activeFilters,
       }),
-    [allStudentRows, payments, expenses, financialAdjustments, courses, profile?.fullName, activeFilters]
+    [
+      allStudentRows,
+      payments,
+      chapaTransactions,
+      expenses,
+      financialAdjustments,
+      courses,
+      profile?.fullName,
+      activeFilters,
+    ]
   );
 
   const filteredSummary = useMemo(
@@ -205,6 +220,7 @@ export function FinancialReportsView({
       const result = generateExcelWorkbook(reportKey, {
         studentRows: allStudentRows,
         payments,
+        chapaTransactions,
         expenses,
         adjustments: financialAdjustments,
         courses,
@@ -321,6 +337,89 @@ export function FinancialReportsView({
       countLabel: `Net ${formatEtbCompact(filteredSummary.netInstitutionalBalanceEtb)}`,
       icon: <Landmark className="w-4 h-4" />,
       accent: 'blue',
+    },
+  ];
+
+  const chapaFiltered = filteredData.filteredChapa;
+  const chapaExportCatalog: Array<{
+    key: ExcelReportKey;
+    title: string;
+    subtitle: string;
+    countLabel: string;
+    icon: React.ReactNode;
+    accent: 'blue' | 'emerald' | 'amber' | 'red' | 'slate';
+  }> = [
+    {
+      key: 'CHAPA_ALL',
+      title: 'All Online Payments (Chapa)',
+      subtitle: 'Complete Chapa transaction ledger with references, channels, verification, and approval status.',
+      countLabel: `${chapaFiltered.length} tx`,
+      icon: <Globe className="w-4 h-4" />,
+      accent: 'blue',
+    },
+    {
+      key: 'CHAPA_VERIFIED',
+      title: 'Verified Online Payments',
+      subtitle: 'All server-verified Chapa transactions with official Chapa references and timestamps.',
+      countLabel: `${chapaFiltered.filter((t) => t.paymentStatus === 'VERIFIED').length} tx`,
+      icon: <ShieldCheck className="w-4 h-4" />,
+      accent: 'blue',
+    },
+    {
+      key: 'CHAPA_PENDING_APPROVAL',
+      title: 'Pending Admin Approvals',
+      subtitle: 'Server-verified online payments currently awaiting ZACMA Administrative approval.',
+      countLabel: `${
+        chapaFiltered.filter(
+          (t) => t.paymentStatus === 'VERIFIED' && t.approvalStatus === 'AWAITING_APPROVAL'
+        ).length
+      } tx`,
+      icon: <Clock className="w-4 h-4" />,
+      accent: 'amber',
+    },
+    {
+      key: 'CHAPA_APPROVED',
+      title: 'Approved Online Payments',
+      subtitle: 'Officially approved Chapa payments posted to ledger with receipt numbers and approver.',
+      countLabel: `${chapaFiltered.filter((t) => t.approvalStatus === 'APPROVED').length} tx`,
+      icon: <CheckCircle2 className="w-4 h-4" />,
+      accent: 'emerald',
+    },
+    {
+      key: 'CHAPA_REJECTED',
+      title: 'Rejected Online Payments',
+      subtitle: 'Chapa transactions declined during admin review with documented rejection reasons.',
+      countLabel: `${chapaFiltered.filter((t) => t.approvalStatus === 'REJECTED').length} tx`,
+      icon: <XCircle className="w-4 h-4" />,
+      accent: 'red',
+    },
+    {
+      key: 'CHAPA_FAILED',
+      title: 'Failed / Cancelled Payments',
+      subtitle: 'Incomplete, failed, or cancelled Chapa checkout attempts excluded from revenue.',
+      countLabel: `${
+        chapaFiltered.filter(
+          (t) => t.paymentStatus === 'FAILED' || t.paymentStatus === 'CANCELLED'
+        ).length
+      } tx`,
+      icon: <AlertTriangle className="w-4 h-4" />,
+      accent: 'slate',
+    },
+    {
+      key: 'CHAPA_MONTHLY',
+      title: 'Monthly Online Summary',
+      subtitle: 'Month-by-month Chapa verified, approved, pending, rejected, and failed ETB totals.',
+      countLabel: `${chapaFiltered.length} records`,
+      icon: <TrendingUp className="w-4 h-4" />,
+      accent: 'blue',
+    },
+    {
+      key: 'CHAPA_STUDENT_HISTORY',
+      title: 'Student Online Payment History',
+      subtitle: 'Per-student Chapa online fee summary with total verified, approved, and remaining balance.',
+      countLabel: `${new Set(chapaFiltered.map((t) => t.studentId)).size} students`,
+      icon: <Users className="w-4 h-4" />,
+      accent: 'slate',
     },
   ];
 
@@ -648,6 +747,61 @@ export function FinancialReportsView({
             </button>
           </div>
         ))}
+      </div>
+
+      {/* Dedicated Chapa Online Payment Excel Reports (.xlsx) Section */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Globe className="w-4 h-4 text-[#172DEB]" />
+            <div>
+              <h2 className="text-sm font-display font-bold text-slate-900">
+                Chapa Online Payment Excel Reports (.xlsx)
+              </h2>
+              <p className="text-xs text-slate-500">
+                Audit-grade Excel exports dedicated to Chapa online gateway verification, approval queues, and student history.
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-mono font-semibold text-slate-600 tabular-nums">
+            {chapaFiltered.length} matched Chapa tx
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          {chapaExportCatalog.map((item) => (
+            <div
+              key={item.key}
+              className="bg-slate-50/50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between gap-3 hover:border-slate-300 transition-colors"
+            >
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div
+                    className={`w-8 h-8 rounded-lg border flex items-center justify-center ${accentClasses[item.accent]}`}
+                  >
+                    {item.icon}
+                  </div>
+                  <span className="text-[11px] font-mono font-semibold text-slate-600 tabular-nums">
+                    {item.countLabel}
+                  </span>
+                </div>
+                <div>
+                  <h3 className="text-xs font-display font-bold text-slate-900">{item.title}</h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{item.subtitle}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={exportingKey !== null}
+                onClick={() => void handleExport(item.key)}
+                className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 bg-white hover:bg-[#172DEB] hover:text-white border border-slate-200 hover:border-[#172DEB] rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{exportingKey === item.key ? 'Generating...' : 'Download .xlsx'}</span>
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Live Preview Table of Matched Student Financial Records */}

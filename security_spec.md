@@ -6,18 +6,21 @@
 3. **Maker-Checker Payment Integrity**: Accountants may only submit new payments with `status == 'PENDING'` and `recordedBy == request.auth.uid`. Accountants can NEVER approve or reject payments, modify approved payments, alter course fees, or modify user roles.
 4. **Registration Approval Gate**: Accountants may only register students with `registrationStatus == 'PENDING'` and `registeredBy == request.auth.uid`. Only Admins may transition students to `APPROVED` or `REJECTED`.
 5. **Duplicate Transaction Reference Prevention**: Every payment submission claims an immutable lock document in `/payment_refs/{sanitizedRef}` that cannot be overwritten or deleted by non-admins.
-6. **Immutable Official Receipts & Audit Trail**: `/receipts` can only be created by Admins for approved payments and can never be updated or deleted. `/audit_logs` are strictly append-only (`update` and `delete` denied for all roles including Admin).
+7. **Identity Document Isolation**: Raw encrypted ID document scans in `/identity_documents/{docId}` are strictly restricted to Admins (and uploader-only `get` during pending review); Students, Instructors, and General Staff have zero read or write access.
+8. **Staff Salary Isolation**: `/staff_compensation/{staffId}` is strictly Admin-only (`read` and `write`). Non-admin staff can never view or modify salaries.
+9. **Atomic ID & Duplicate Guard**: `/id_counters/{counterId}` only permits monotonic increments (`incoming().currentValue == existing().currentValue + 1`) by finance staff or Admin. `/id_number_locks/{hashId}` prevents duplicate identification numbers and cannot be overwritten or deleted by non-admins.
+10. **Human Verification Gate**: OCR scans never auto-approve identities; Accountants may only create `PENDING` student/staff registrations and `PENDING_REVIEW` identity documents. Only Admins can transition to `APPROVED`, `VERIFIED`, `FLAGGED`, or `REJECTED`.
 
 ## Dirty Dozen Adversarial Payloads (Must All Be Denied)
 1. **Self-Privilege Escalation**: Unprivileged user creates or updates `/profiles/{uid}` with `role: 'ADMIN'`.
-2. **Accountant Self-Approval**: Accountant updates `/payments/{id}` changing `status` from `'PENDING'` to `'APPROVED'`.
-3. **Accountant Approved-Payment Tampering**: Accountant edits `amountEtb` on an already `'APPROVED'` payment.
-4. **Accountant Direct Approved Submission**: Accountant creates `/payments/{id}` directly with `status: 'APPROVED'`.
-5. **Accountant Course Fee Manipulation**: Accountant updates `/courses/{id}` changing `feeEtb`.
-6. **Instructor Financial Snooping**: Instructor attempts `get` or `list` on `/payments`, `/receipts`, or `/expenses`.
-7. **Audit Trail Tampering**: Admin or Accountant attempts `update` or `delete` on `/audit_logs/{id}`.
+2. **Accountant Self-Approval**: Accountant updates `/payments/{id}` or `/students/{id}` or `/staff_records/{id}` changing status to `'APPROVED'`.
+3. **Accountant Salary Snooping**: Accountant attempts `get` or `list` on `/staff_compensation/{staffId}`.
+4. **Student/Instructor ID Vault Breach**: Student or Instructor attempts `get` or `list` on `/identity_documents/{docId}`.
+5. **Accountant ID Auto-Verification**: Accountant creates `/identity_documents/{docId}` with `verificationStatus: 'VERIFIED'` or updates an existing document's `verificationStatus`.
+6. **Counter Rollback Attack**: Accountant decrements `/id_counters/student_seq` `currentValue` to reuse an existing ID code.
+7. **Duplicate ID Lock Deletion**: Accountant attempts `delete` or `update` on `/id_number_locks/{hashId}` to bypass duplicate detection.
 8. **Receipt Forgery**: Accountant attempts `create` on `/receipts/{id}` for a pending payment.
-9. **Spoofed Recorder Identity**: Accountant creates `/payments/{id}` with `recordedBy: 'someone-else'`.
-10. **Shadow Field Injection**: User injects unauthorized field `isSuperAdmin: true` on `/students/{id}` or `/payments/{id}`.
+9. **Spoofed Uploader Identity**: Accountant creates `/identity_documents/{docId}` with `uploadedBy: 'other-user-uid'`.
+10. **Shadow Field Injection**: User injects unauthorized field `isSuperAdmin: true` on `/staff_records/{id}` or `/identity_documents/{docId}`.
 11. **Unverified Email Spoofing**: Request with matching admin email but `email_verified == false`.
-12. **Oversized ID / String Poisoning**: Document creation with 200-char invalid document ID or 200KB string payload.
+12. **Oversized ID / String Poisoning**: Document creation with 200-char invalid document ID or payload exceeding schema bounds.

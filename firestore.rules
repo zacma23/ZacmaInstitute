@@ -150,15 +150,26 @@ service cloud.firestore {
 
     function isValidStudent(data) {
       return data.keys().hasAll(['studentCode', 'fullName', 'gender', 'phone', 'address', 'courseId', 'courseName', 'enrollmentDate', 'courseFeeEtb', 'paymentPlanCode', 'registrationStatus', 'registeredBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['studentCode', 'fullName', 'gender', 'phone', 'altPhone', 'address', 'photoUrl', 'courseId', 'courseName', 'enrollmentDate', 'registrationDateEthiopian', 'registrationTimeEat', 'courseFeeEtb', 'paymentPlanCode', 'registrationStatus', 'registeredBy', 'registeredByName', 'approvedBy', 'approvedByName', 'approvedAt', 'rejectionReason', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['studentCode', 'fullName', 'gender', 'phone', 'altPhone', 'email', 'dateOfBirth', 'nationality', 'address', 'photoUrl', 'idDocumentType', 'idNumberMasked', 'idNumberHash', 'idExpiryDate', 'idVaultRefId', 'idVerificationStatus', 'ocrConfidenceSummary', 'initialPaymentEtb', 'courseId', 'courseName', 'enrollmentDate', 'registrationDateEthiopian', 'registrationTimeEat', 'courseFeeEtb', 'paymentPlanCode', 'registrationStatus', 'registeredBy', 'registeredByName', 'approvedBy', 'approvedByName', 'approvedAt', 'rejectionReason', 'createdAt', 'updatedAt'])
         && isNonEmptyString(data.studentCode, 24)
-        && data.studentCode.matches('^ZAC-[0-9]{4}-[0-9]{4}$')
+        && data.studentCode.matches('^ZAC-(?:[0-9]{4}|STU)-[0-9]{4,}$')
         && isNonEmptyString(data.fullName, 120)
-        && data.gender in ['Male', 'Female']
+        && data.gender in ['Male', 'Female', 'Unspecified']
         && isNonEmptyString(data.phone, 30)
         && isOptionalString(data, 'altPhone', 30)
+        && isOptionalString(data, 'email', 160)
+        && isOptionalString(data, 'dateOfBirth', 20)
+        && isOptionalString(data, 'nationality', 80)
         && isNonEmptyString(data.address, 240)
         && isOptionalString(data, 'photoUrl', 90000)
+        && (!('idDocumentType' in data) || data.idDocumentType in ['NATIONAL_ID', 'ETHIOPIAN_FAYDA_ID', 'PASSPORT', 'DRIVING_LICENCE'])
+        && isOptionalString(data, 'idNumberMasked', 40)
+        && isOptionalString(data, 'idNumberHash', 80)
+        && isOptionalString(data, 'idExpiryDate', 20)
+        && isOptionalString(data, 'idVaultRefId', 128)
+        && (!('idVerificationStatus' in data) || data.idVerificationStatus in ['UNVERIFIED', 'PENDING_REVIEW', 'VERIFIED', 'FLAGGED', 'REJECTED'])
+        && isOptionalString(data, 'ocrConfidenceSummary', 240)
+        && (!('initialPaymentEtb' in data) || isNonNegativeNumber(data.initialPaymentEtb))
         && isNonEmptyString(data.courseId, 128)
         && isNonEmptyString(data.courseName, 120)
         && isNonEmptyString(data.enrollmentDate, 20)
@@ -230,7 +241,7 @@ service cloud.firestore {
         && isNonEmptyString(data.courseName, 120)
         && isPositiveNumber(data.amountEtb)
         && isNonEmptyString(data.paymentDate, 20)
-        && data.paymentMethod in ['Cash', 'CBE Birr', 'Telebirr', 'Bank Transfer', 'Check']
+        && data.paymentMethod in ['Cash', 'CBE Birr', 'Telebirr', 'Bank Transfer', 'Check', 'Chapa']
         && isNonEmptyString(data.recordedBy, 128)
         && isNonEmptyString(data.recordedByName, 120)
         && data.status in ['PENDING', 'APPROVED', 'REJECTED']
@@ -291,7 +302,7 @@ service cloud.firestore {
         && isNonEmptyString(data.title, 140)
         && isPositiveNumber(data.amountEtb)
         && isNonEmptyString(data.expenseDate, 20)
-        && data.paymentMethod in ['Cash', 'CBE Birr', 'Telebirr', 'Bank Transfer', 'Check']
+        && data.paymentMethod in ['Cash', 'CBE Birr', 'Telebirr', 'Bank Transfer', 'Check', 'Chapa']
         && isOptionalString(data, 'referenceNo', 64)
         && isNonEmptyString(data.recordedBy, 128)
         && isNonEmptyString(data.recordedByName, 120)
@@ -320,7 +331,7 @@ service cloud.firestore {
     function isValidNotification(data) {
       return data.keys().hasAll(['type', 'title', 'message', 'targetRole', 'isRead', 'createdAt'])
         && data.keys().hasOnly(['type', 'title', 'message', 'targetRole', 'recipientUid', 'category', 'actionSection', 'studentId', 'studentCode', 'studentName', 'courseName', 'expectedAmountEtb', 'paidAmountEtb', 'remainingBalanceEtb', 'dueDate', 'paymentStatus', 'dedupKey', 'entityType', 'entityId', 'isRead', 'createdAt'])
-        && data.type in ['DEADLINE_APPROACHING', 'OVERDUE_BALANCE', 'PENDING_REGISTRATION', 'PENDING_PAYMENT', 'REJECTED_PAYMENT', 'UPCOMING_PAYMENT', 'PAYMENT_DUE_TODAY', 'PAYMENT_OVERDUE', 'PAYMENT_RECEIVED', 'PAYMENT_APPROVED', 'PAYMENT_REJECTED', 'OUTSTANDING_BALANCE', 'REGISTRATION_APPROVED', 'COURSE_ANNOUNCEMENT', 'ATTENDANCE_UPDATE', 'INSTRUCTOR_MESSAGE', 'ADMIN_ANNOUNCEMENT', 'SCHEDULE_CHANGE', 'NEW_INTERNAL_MESSAGE']
+        && data.type in ['DEADLINE_APPROACHING', 'OVERDUE_BALANCE', 'PENDING_REGISTRATION', 'PENDING_STAFF_REGISTRATION', 'STAFF_REGISTRATION_APPROVED', 'ID_VERIFICATION_FLAGGED', 'PENDING_PAYMENT', 'REJECTED_PAYMENT', 'UPCOMING_PAYMENT', 'PAYMENT_DUE_TODAY', 'PAYMENT_OVERDUE', 'PAYMENT_RECEIVED', 'PAYMENT_APPROVED', 'PAYMENT_REJECTED', 'OUTSTANDING_BALANCE', 'REGISTRATION_APPROVED', 'COURSE_ANNOUNCEMENT', 'ATTENDANCE_UPDATE', 'INSTRUCTOR_MESSAGE', 'ADMIN_ANNOUNCEMENT', 'SCHEDULE_CHANGE', 'NEW_INTERNAL_MESSAGE', 'CHAPA_PAYMENT_LINK', 'CHAPA_PAYMENT_VERIFIED', 'CHAPA_PAYMENT_APPROVED', 'CHAPA_PAYMENT_REJECTED']
         && isNonEmptyString(data.title, 140)
         && isNonEmptyString(data.message, 420)
         && data.targetRole in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT', 'ALL']
@@ -353,6 +364,49 @@ service cloud.firestore {
         && data.whatsappEnabled is bool
         && isPositiveNumber(data.upcomingLeadDays)
         && isPositiveNumber(data.overdueRepeatDays)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidChapaTransaction(data) {
+      return data.keys().hasAll(['txRef', 'studentId', 'studentCode', 'studentName', 'courseId', 'courseName', 'enrollmentId', 'amountEtb', 'currency', 'paymentMethod', 'source', 'paymentStatus', 'approvalStatus', 'createdBy', 'createdByName', 'createdByRole', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['txRef', 'studentId', 'studentCode', 'studentName', 'studentPhone', 'studentEmail', 'courseId', 'courseName', 'enrollmentId', 'amountEtb', 'currency', 'paymentMethod', 'source', 'checkoutUrl', 'paymentStatus', 'approvalStatus', 'chapaReference', 'chapaChannel', 'chapaFeeEtb', 'verificationProof', 'verificationSummary', 'paymentDate', 'verifiedAt', 'expiresAt', 'createdBy', 'createdByName', 'createdByRole', 'approvedBy', 'approvedByName', 'approvedAt', 'approvalNotes', 'rejectionReason', 'paymentId', 'receiptId', 'receiptNumber', 'createdAt', 'updatedAt'])
+        && isNonEmptyString(data.txRef, 64)
+        && data.txRef.matches('^[A-Za-z0-9\\-_]+$')
+        && isNonEmptyString(data.studentId, 128)
+        && isNonEmptyString(data.studentCode, 24)
+        && isNonEmptyString(data.studentName, 120)
+        && isOptionalString(data, 'studentPhone', 30)
+        && isOptionalString(data, 'studentEmail', 160)
+        && isNonEmptyString(data.courseId, 128)
+        && isNonEmptyString(data.courseName, 120)
+        && isNonEmptyString(data.enrollmentId, 128)
+        && isPositiveNumber(data.amountEtb)
+        && data.currency == 'ETB'
+        && data.paymentMethod == 'Chapa'
+        && data.source in ['STUDENT_PORTAL', 'PAYMENT_LINK']
+        && isOptionalString(data, 'checkoutUrl', 1000)
+        && data.paymentStatus in ['INITIATED', 'PENDING_VERIFICATION', 'VERIFIED', 'FAILED', 'CANCELLED', 'REFUNDED']
+        && data.approvalStatus in ['AWAITING_APPROVAL', 'APPROVED', 'REJECTED']
+        && isOptionalString(data, 'chapaReference', 120)
+        && isOptionalString(data, 'chapaChannel', 80)
+        && isOptionalNumber(data, 'chapaFeeEtb')
+        && isOptionalString(data, 'verificationProof', 128)
+        && isOptionalString(data, 'verificationSummary', 400)
+        && isOptionalString(data, 'paymentDate', 20)
+        && isOptionalString(data, 'verifiedAt', 40)
+        && isOptionalString(data, 'expiresAt', 40)
+        && isNonEmptyString(data.createdBy, 128)
+        && isNonEmptyString(data.createdByName, 120)
+        && data.createdByRole in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT']
+        && isOptionalString(data, 'approvedBy', 128)
+        && isOptionalString(data, 'approvedByName', 120)
+        && isOptionalString(data, 'approvedAt', 40)
+        && isOptionalString(data, 'approvalNotes', 400)
+        && isOptionalString(data, 'rejectionReason', 300)
+        && isOptionalString(data, 'paymentId', 128)
+        && isOptionalString(data, 'receiptId', 128)
+        && isOptionalString(data, 'receiptNumber', 40)
+        && isNonEmptyString(data.createdAt, 40)
         && isNonEmptyString(data.updatedAt, 40);
     }
 
@@ -569,6 +623,111 @@ service cloud.firestore {
         && isNonEmptyString(data.createdAt, 40);
     }
 
+    function isValidStaffRecord(data) {
+      return data.keys().hasAll(['staffCode', 'fullName', 'address', 'phone', 'email', 'dateOfBirth', 'nationality', 'idDocumentType', 'department', 'jobPosition', 'portalRole', 'employmentStartDate', 'registrationStatus', 'registeredBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['staffCode', 'fullName', 'address', 'phone', 'email', 'dateOfBirth', 'nationality', 'gender', 'idDocumentType', 'idNumberMasked', 'idNumberHash', 'idExpiryDate', 'idVaultRefId', 'idVerificationStatus', 'department', 'jobPosition', 'portalRole', 'employmentStartDate', 'employmentStartDateEthiopian', 'photoUrl', 'linkedProfileUid', 'registrationStatus', 'registeredBy', 'registeredByName', 'approvedBy', 'approvedByName', 'approvedAt', 'rejectionReason', 'ocrConfidenceSummary', 'createdAt', 'updatedAt'])
+        && isNonEmptyString(data.staffCode, 24)
+        && data.staffCode.matches('^ZAC-STA-[0-9]{4,}$')
+        && isNonEmptyString(data.fullName, 120)
+        && isNonEmptyString(data.address, 240)
+        && isNonEmptyString(data.phone, 30)
+        && isNonEmptyString(data.email, 160)
+        && isNonEmptyString(data.dateOfBirth, 20)
+        && isNonEmptyString(data.nationality, 80)
+        && (!('gender' in data) || data.gender in ['Male', 'Female', 'Unspecified'])
+        && data.idDocumentType in ['NATIONAL_ID', 'ETHIOPIAN_FAYDA_ID', 'PASSPORT', 'DRIVING_LICENCE']
+        && isOptionalString(data, 'idNumberMasked', 40)
+        && isOptionalString(data, 'idNumberHash', 80)
+        && isOptionalString(data, 'idExpiryDate', 20)
+        && isOptionalString(data, 'idVaultRefId', 128)
+        && (!('idVerificationStatus' in data) || data.idVerificationStatus in ['UNVERIFIED', 'PENDING_REVIEW', 'VERIFIED', 'FLAGGED', 'REJECTED'])
+        && isNonEmptyString(data.department, 80)
+        && isNonEmptyString(data.jobPosition, 80)
+        && data.portalRole in ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF']
+        && isNonEmptyString(data.employmentStartDate, 20)
+        && isOptionalString(data, 'employmentStartDateEthiopian', 40)
+        && isOptionalString(data, 'photoUrl', 90000)
+        && isOptionalString(data, 'linkedProfileUid', 128)
+        && data.registrationStatus in ['PENDING', 'APPROVED', 'REJECTED']
+        && isNonEmptyString(data.registeredBy, 128)
+        && isOptionalString(data, 'registeredByName', 120)
+        && isOptionalString(data, 'approvedBy', 128)
+        && isOptionalString(data, 'approvedByName', 120)
+        && isOptionalString(data, 'approvedAt', 40)
+        && isOptionalString(data, 'rejectionReason', 300)
+        && isOptionalString(data, 'ocrConfidenceSummary', 240)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidStaffCompensation(data) {
+      return data.keys().hasAll(['staffId', 'staffCode', 'salaryEtb', 'payFrequency', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['staffId', 'staffCode', 'salaryEtb', 'payFrequency', 'notes', 'updatedBy', 'updatedByName', 'createdAt', 'updatedAt'])
+        && isValidId(data.staffId)
+        && isNonEmptyString(data.staffCode, 24)
+        && isNonNegativeNumber(data.salaryEtb)
+        && data.payFrequency in ['MONTHLY', 'BIWEEKLY', 'CONTRACT']
+        && isOptionalString(data, 'notes', 300)
+        && isNonEmptyString(data.updatedBy, 128)
+        && isOptionalString(data, 'updatedByName', 120)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidIdentityDocument(data) {
+      return data.keys().hasAll(['subjectType', 'subjectId', 'subjectCode', 'subjectName', 'documentType', 'idNumberMasked', 'idNumberHash', 'encryptionAlg', 'encryptionIv', 'encryptedPayload', 'hasFrontImage', 'hasBackImage', 'ocrConfidence', 'verificationStatus', 'uploadedBy', 'uploadedByName', 'isRedacted', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['subjectType', 'subjectId', 'subjectCode', 'subjectName', 'documentType', 'idNumberMasked', 'idNumberHash', 'documentExpiryDate', 'encryptionAlg', 'encryptionIv', 'encryptedPayload', 'fileMimeType', 'hasFrontImage', 'hasBackImage', 'ocrConfidence', 'ocrWarnings', 'verificationStatus', 'verificationNotes', 'uploadedBy', 'uploadedByName', 'verifiedBy', 'verifiedByName', 'verifiedAt', 'retentionDeleteAfter', 'isRedacted', 'createdAt', 'updatedAt'])
+        && data.subjectType in ['STUDENT', 'STAFF']
+        && isValidId(data.subjectId)
+        && isNonEmptyString(data.subjectCode, 24)
+        && isNonEmptyString(data.subjectName, 120)
+        && data.documentType in ['NATIONAL_ID', 'ETHIOPIAN_FAYDA_ID', 'PASSPORT', 'DRIVING_LICENCE']
+        && isNonEmptyString(data.idNumberMasked, 40)
+        && isNonEmptyString(data.idNumberHash, 80)
+        && isOptionalString(data, 'documentExpiryDate', 20)
+        && data.encryptionAlg == 'AES-GCM-256'
+        && isNonEmptyString(data.encryptionIv, 64)
+        && data.encryptedPayload is string && data.encryptedPayload.size() >= 1 && data.encryptedPayload.size() <= 750000
+        && isOptionalString(data, 'fileMimeType', 80)
+        && data.hasFrontImage is bool
+        && data.hasBackImage is bool
+        && data.ocrConfidence in ['HIGH', 'MEDIUM', 'LOW', 'MANUAL']
+        && (!('ocrWarnings' in data) || isBoundedStringList(data.ocrWarnings, 12))
+        && data.verificationStatus in ['PENDING_REVIEW', 'VERIFIED', 'FLAGGED', 'REJECTED']
+        && isOptionalString(data, 'verificationNotes', 400)
+        && isNonEmptyString(data.uploadedBy, 128)
+        && isNonEmptyString(data.uploadedByName, 120)
+        && isOptionalString(data, 'verifiedBy', 128)
+        && isOptionalString(data, 'verifiedByName', 120)
+        && isOptionalString(data, 'verifiedAt', 40)
+        && isOptionalString(data, 'retentionDeleteAfter', 20)
+        && data.isRedacted is bool
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidIdNumberLock(data) {
+      return data.keys().hasAll(['idNumberHash', 'documentType', 'subjectType', 'subjectId', 'subjectCode', 'subjectName', 'createdBy', 'createdAt'])
+        && data.keys().hasOnly(['idNumberHash', 'documentType', 'subjectType', 'subjectId', 'subjectCode', 'subjectName', 'createdBy', 'createdAt'])
+        && isNonEmptyString(data.idNumberHash, 80)
+        && data.documentType in ['NATIONAL_ID', 'ETHIOPIAN_FAYDA_ID', 'PASSPORT', 'DRIVING_LICENCE']
+        && data.subjectType in ['STUDENT', 'STAFF']
+        && isValidId(data.subjectId)
+        && isNonEmptyString(data.subjectCode, 24)
+        && isNonEmptyString(data.subjectName, 120)
+        && isNonEmptyString(data.createdBy, 128)
+        && isNonEmptyString(data.createdAt, 40);
+    }
+
+    function isValidIdCounter(data) {
+      return data.keys().hasAll(['prefix', 'currentValue', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['prefix', 'currentValue', 'updatedBy', 'updatedAt'])
+        && data.prefix in ['ZAC-STU', 'ZAC-STA']
+        && data.currentValue is int && data.currentValue >= 1 && data.currentValue <= 9999999
+        && isNonEmptyString(data.updatedBy, 128)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
     function isConversationMember(convData) {
       return request.auth.uid in convData.participantIds
         || (convData.type == 'BROADCAST' && (
@@ -650,11 +809,14 @@ service cloud.firestore {
       allow list: if isSignedIn() && isStaff();
       allow create: if isSignedIn() && isValidId(studentId) && isValidStudent(incoming()) && (
         isAdmin() ||
-        (isAccountant() && incoming().registrationStatus == 'PENDING' && incoming().registeredBy == request.auth.uid)
+        (isAccountant()
+          && incoming().registrationStatus == 'PENDING'
+          && incoming().registeredBy == request.auth.uid
+          && (!('idVerificationStatus' in incoming()) || incoming().idVerificationStatus in ['UNVERIFIED', 'PENDING_REVIEW']))
       );
       allow update: if isSignedIn() && isValidId(studentId) && isValidStudent(incoming()) && incoming().createdAt == existing().createdAt && incoming().studentCode == existing().studentCode && (
         isAdmin() ||
-        (isAccountant() && existing().registrationStatus == 'PENDING' && incoming().registrationStatus == 'PENDING' && incoming().registeredBy == existing().registeredBy && incoming().courseFeeEtb == existing().courseFeeEtb && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'altPhone', 'address', 'photoUrl', 'updatedAt']))
+        (isAccountant() && existing().registrationStatus == 'PENDING' && incoming().registrationStatus == 'PENDING' && incoming().registeredBy == existing().registeredBy && incoming().courseFeeEtb == existing().courseFeeEtb && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'altPhone', 'email', 'dateOfBirth', 'nationality', 'address', 'photoUrl', 'updatedAt']))
       );
       allow delete: if isSignedIn() && isValidId(studentId) && isAdmin();
     }
@@ -795,7 +957,8 @@ service cloud.firestore {
       );
       allow create: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming()) && (
         isStaff() ||
-        (isStudent() && incoming().type == 'NEW_INTERNAL_MESSAGE' && ('recipientUid' in incoming()))
+        (isStudent() && incoming().type == 'NEW_INTERNAL_MESSAGE' && ('recipientUid' in incoming())) ||
+        (isStudent() && incoming().type == 'CHAPA_PAYMENT_VERIFIED' && ('studentId' in incoming()) && isOwnStudentRecord(incoming().studentId) && incoming().targetRole in ['ADMIN', 'STUDENT'])
       );
       allow update: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming()) && (
         isAdmin() ||
@@ -992,6 +1155,154 @@ service cloud.firestore {
       allow list: if isSignedIn() && (isAdmin() || existing().userId == request.auth.uid);
       allow create: if isSignedIn() && isValidId(entryId) && isValidLoginHistory(incoming()) && (isStaff() || isStudent()) && incoming().userId == request.auth.uid;
       allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // 28. Chapa Online Payment Transactions (Server-verified; Admin-only approval; immutable)
+    // ---------------------------------------------------------
+    match /chapa_transactions/{txId} {
+      allow get: if isSignedIn() && isValidId(txId) && (isFinanceStaff() || isOwnStudentRecord(existing().studentId));
+      allow list: if isSignedIn() && (isFinanceStaff() || isOwnStudentRecord(existing().studentId));
+      allow create: if isSignedIn() && isValidId(txId) && isValidChapaTransaction(incoming())
+        && incoming().approvalStatus == 'AWAITING_APPROVAL'
+        && incoming().paymentStatus == 'INITIATED'
+        && incoming().createdBy == request.auth.uid
+        && (
+          isAdmin() ||
+          isAccountant() ||
+          (isStudent() && incoming().source == 'STUDENT_PORTAL' && isOwnStudentRecord(incoming().studentId))
+        );
+      allow update: if isSignedIn() && isValidId(txId) && isValidChapaTransaction(incoming())
+        && incoming().txRef == existing().txRef
+        && incoming().studentId == existing().studentId
+        && incoming().enrollmentId == existing().enrollmentId
+        && incoming().amountEtb == existing().amountEtb
+        && incoming().currency == existing().currency
+        && incoming().paymentMethod == existing().paymentMethod
+        && incoming().source == existing().source
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && (
+          isAdmin() ||
+          (
+            (isAccountant() || isOwnStudentRecord(existing().studentId))
+            && existing().approvalStatus == 'AWAITING_APPROVAL'
+            && existing().paymentStatus in ['INITIATED', 'PENDING_VERIFICATION']
+            && incoming().approvalStatus == 'AWAITING_APPROVAL'
+            && incoming().paymentStatus in ['PENDING_VERIFICATION', 'VERIFIED', 'FAILED', 'CANCELLED']
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'paymentStatus',
+              'chapaReference',
+              'chapaChannel',
+              'chapaFeeEtb',
+              'verificationProof',
+              'verificationSummary',
+              'paymentDate',
+              'verifiedAt',
+              'updatedAt'
+            ])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // 29. Staff Registrations & HR Records (Admin full access; Accountant submits PENDING only)
+    // ---------------------------------------------------------
+    match /staff_records/{staffId} {
+      allow get: if isSignedIn() && isValidId(staffId) && (
+        isAdmin() ||
+        (isAccountant() && existing().registeredBy == request.auth.uid)
+      );
+      allow list: if isSignedIn() && (
+        isAdmin() ||
+        (isAccountant() && existing().registeredBy == request.auth.uid)
+      );
+      allow create: if isSignedIn() && isValidId(staffId) && isValidStaffRecord(incoming()) && (
+        isAdmin() ||
+        (isAccountant()
+          && incoming().registrationStatus == 'PENDING'
+          && incoming().registeredBy == request.auth.uid
+          && incoming().portalRole != 'ADMIN'
+          && (!('idVerificationStatus' in incoming()) || incoming().idVerificationStatus in ['UNVERIFIED', 'PENDING_REVIEW']))
+      );
+      allow update: if isSignedIn() && isValidId(staffId) && isValidStaffRecord(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().staffCode == existing().staffCode
+        && (
+          isAdmin() ||
+          (isAccountant()
+            && existing().registeredBy == request.auth.uid
+            && existing().registrationStatus == 'PENDING'
+            && incoming().registrationStatus == 'PENDING'
+            && incoming().portalRole == existing().portalRole
+            && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'address', 'phone', 'email', 'dateOfBirth', 'nationality', 'gender', 'photoUrl', 'updatedAt']))
+        );
+      allow delete: if isSignedIn() && isValidId(staffId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 30. Staff Compensation / Salary (Strictly Admin-only PII & financial isolation)
+    // ---------------------------------------------------------
+    match /staff_compensation/{staffId} {
+      allow get: if isSignedIn() && isValidId(staffId) && isAdmin();
+      allow list: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && isValidId(staffId) && isValidStaffCompensation(incoming()) && incoming().staffId == staffId && isAdmin() && incoming().updatedBy == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(staffId) && isValidStaffCompensation(incoming()) && incoming().staffId == existing().staffId && incoming().createdAt == existing().createdAt && isAdmin() && incoming().updatedBy == request.auth.uid;
+      allow delete: if isSignedIn() && isValidId(staffId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 31. Restricted Encrypted Identity Documents Vault (Admin-only review, decryption & retention)
+    // ---------------------------------------------------------
+    match /identity_documents/{docId} {
+      allow get: if isSignedIn() && isValidId(docId) && (
+        isAdmin() ||
+        (isAccountant() && existing().uploadedBy == request.auth.uid && existing().verificationStatus == 'PENDING_REVIEW')
+      );
+      allow list: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && isValidId(docId) && isValidIdentityDocument(incoming()) && (
+        isAdmin() ||
+        (isAccountant()
+          && incoming().uploadedBy == request.auth.uid
+          && incoming().verificationStatus == 'PENDING_REVIEW'
+          && incoming().isRedacted == false)
+      );
+      allow update: if isSignedIn() && isValidId(docId) && isValidIdentityDocument(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().subjectId == existing().subjectId
+        && incoming().subjectType == existing().subjectType
+        && incoming().uploadedBy == existing().uploadedBy
+        && isAdmin();
+      allow delete: if isSignedIn() && isValidId(docId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 32. Hashed Duplicate Identification Number Locks
+    // ---------------------------------------------------------
+    match /id_number_locks/{hashId} {
+      allow get: if isSignedIn() && isValidId(hashId) && isFinanceStaff();
+      allow list: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && isValidId(hashId) && isValidIdNumberLock(incoming()) && isFinanceStaff() && incoming().createdBy == request.auth.uid;
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(hashId) && isAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 33. Atomic Sequential Registration ID Counters (ZAC-STU-XXXX & ZAC-STA-XXXX)
+    // ---------------------------------------------------------
+    match /id_counters/{counterId} {
+      allow get: if isSignedIn() && isValidId(counterId) && isFinanceStaff();
+      allow list: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && isValidId(counterId) && isValidIdCounter(incoming()) && isFinanceStaff() && incoming().updatedBy == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(counterId) && isValidIdCounter(incoming())
+        && incoming().prefix == existing().prefix
+        && incoming().updatedBy == request.auth.uid
+        && (
+          isAdmin() ||
+          (isAccountant() && incoming().currentValue == existing().currentValue + 1)
+        );
+      allow delete: if false;
     }
   }
 }
