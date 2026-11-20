@@ -5,12 +5,15 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
+  ArrowLeftRight,
   BarChart3,
   Bell,
   BellRing,
   BookOpen,
   CheckCheck,
   ClipboardCheck,
+  Clock,
   CreditCard,
   Database,
   FileSpreadsheet,
@@ -18,9 +21,11 @@ import {
   Globe,
   History,
   LayoutDashboard,
+  Lock,
   LogOut,
   Menu,
   MessageSquare,
+  Palette,
   ScanLine,
   ShieldCheck,
   Smartphone,
@@ -56,8 +61,17 @@ import { SetupWizardView } from './modules/SetupWizardView';
 import { StudentPortalView } from './modules/StudentPortalView';
 import { MessagingView } from './modules/MessagingView';
 import { CommunicationsAdminView } from './modules/CommunicationsAdminView';
+import { InstituteSettingsView } from './modules/InstituteSettingsView';
+import { SuperAdminShell } from './modules/superadmin/SuperAdminShell';
 import { markNotificationRead } from './lib/zacmaService';
 import { markAllNotificationsRead } from './lib/communicationService';
+import {
+  ALL_SAAS_MODULES,
+  DEFAULT_ZACMA_TENANT_ID,
+  INSTITUTE_ROLE_LABELS,
+  isNavSectionAllowedByModules,
+  requiredModuleForNavSection,
+} from './lib/saasService';
 import { formatAddisDateTimeDual } from './lib/ethiopianCalendar';
 import {
   NavSection,
@@ -85,6 +99,13 @@ function PortalShell() {
     setPreviewRole,
     authLoading,
     signOutUser,
+    isPlatformUser,
+    portalMode,
+    setPortalMode,
+    activeTenant,
+    activeTenantId,
+    activeSupportSession,
+    endSupportAccess,
     students,
     staffRecords,
     installments,
@@ -104,6 +125,26 @@ function PortalShell() {
   const [notifFilter, setNotifFilter] = useState<'ALL' | 'FINANCE' | 'MESSAGES' | 'ANNOUNCEMENTS'>('ALL');
   const [markingAllNotifs, setMarkingAllNotifs] = useState(false);
   const [activeReceipt, setActiveReceipt] = useState<Receipt | null>(null);
+  const [supportCountdown, setSupportCountdown] = useState<string>('');
+
+  useEffect(() => {
+    if (!activeSupportSession) {
+      setSupportCountdown('');
+      return;
+    }
+    const updateTimer = () => {
+      const diffSec = Math.max(
+        0,
+        Math.floor((new Date(activeSupportSession.expiresAt).getTime() - Date.now()) / 1000)
+      );
+      const mins = Math.floor(diffSec / 60);
+      const secs = diffSec % 60;
+      setSupportCountdown(`${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`);
+    };
+    updateTimer();
+    const id = window.setInterval(updateTimer, 1000);
+    return () => window.clearInterval(id);
+  }, [activeSupportSession]);
 
   const openReportsWithFilter = (status?: 'ALL' | StudentPaymentCategory) => {
     setReportStatusFilter(status || 'ALL');
@@ -143,65 +184,65 @@ function PortalShell() {
         id: 'dashboard',
         label: 'Dashboard',
         icon: <LayoutDashboard className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT', 'INSTRUCTOR', 'RECEPTIONIST', 'HR_OFFICER', 'GENERAL_STAFF'],
       },
       {
         id: 'registrations',
         label: 'AI Registration & ID',
         icon: <ScanLine className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT', 'RECEPTIONIST', 'HR_OFFICER'],
         badgeCount: pendingRegistrationsCount,
       },
       {
         id: 'students',
         label: 'Students',
         icon: <Users className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT', 'INSTRUCTOR', 'RECEPTIONIST', 'GENERAL_STAFF'],
       },
       {
         id: 'courses',
         label: 'Courses',
         icon: <BookOpen className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT', 'INSTRUCTOR', 'RECEPTIONIST', 'GENERAL_STAFF'],
       },
       {
         id: 'payments',
         label: 'Fees & Payments',
         icon: <CreditCard className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT'],
       },
       {
         id: 'chapa',
         label: 'Chapa Online Payments',
         icon: <Globe className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT'],
         badgeCount: pendingChapaApprovalsCount,
       },
       {
         id: 'reminders',
         label: 'Payment Reminders',
         icon: <BellRing className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT'],
         badgeCount: overdueInstallmentsCount,
       },
       {
         id: 'approvals',
         label: 'Approvals Queue',
         icon: <ShieldCheck className="w-4 h-4" />,
-        roles: ['ADMIN'],
+        roles: ['ADMIN', 'MANAGER'],
         badgeCount: pendingApprovalsCount,
       },
       {
         id: 'receipts',
         label: 'Official Receipts',
         icon: <FileText className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT'],
       },
       {
         id: 'accounting',
         label: 'Accounting & Ledger',
         icon: <BarChart3 className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT'],
       },
       {
         id: 'reports',
@@ -209,32 +250,38 @@ function PortalShell() {
         icon: <FileSpreadsheet className="w-4 h-4" />,
         roles:
           effectiveRole === 'ACCOUNTANT' && profile?.canExportReports
-            ? ['ADMIN', 'ACCOUNTANT']
-            : ['ADMIN'],
+            ? ['ADMIN', 'MANAGER', 'ACCOUNTANT']
+            : ['ADMIN', 'MANAGER'],
       },
       {
         id: 'attendance',
         label: 'Attendance',
         icon: <ClipboardCheck className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF'],
       },
       {
         id: 'messages',
         label: 'Internal Messages',
         icon: <MessageSquare className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT', 'INSTRUCTOR', 'RECEPTIONIST', 'HR_OFFICER', 'GENERAL_STAFF'],
         badgeCount: unreadMessagesCount,
       },
       {
         id: 'communications',
         label: 'SMS & Broadcasts',
         icon: <Smartphone className="w-4 h-4" />,
-        roles: ['ADMIN', 'ACCOUNTANT'],
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT'],
       },
       {
         id: 'staff',
         label: 'Staff & Roles',
         icon: <UserCog className="w-4 h-4" />,
+        roles: ['ADMIN', 'HR_OFFICER'],
+      },
+      {
+        id: 'branding',
+        label: 'Branding & Plan',
+        icon: <Palette className="w-4 h-4" />,
         roles: ['ADMIN'],
       },
       {
@@ -251,7 +298,9 @@ function PortalShell() {
       },
     ];
     if (!effectiveRole) return [];
-    const roleFiltered = all.filter((item) => item.roles.includes(effectiveRole));
+    const roleFiltered = all
+      .filter((item) => item.roles.includes(effectiveRole))
+      .filter((item) => isNavSectionAllowedByModules(item.id, activeTenant?.enabledModules));
     if (
       effectiveRole === 'GENERAL_STAFF' &&
       profile?.allowedModules &&
@@ -265,6 +314,7 @@ function PortalShell() {
     effectiveRole,
     profile?.allowedModules,
     profile?.canExportReports,
+    activeTenant?.enabledModules,
     pendingRegistrationsCount,
     pendingApprovalsCount,
     pendingChapaApprovalsCount,
@@ -329,6 +379,17 @@ function PortalShell() {
     );
   }
 
+  // ZACMA Super Admin Control Center Mode (Platform Owner)
+  if (isPlatformUser && portalMode === 'SUPER_ADMIN' && !activeSupportSession) {
+    return (
+      <>
+        <SuperAdminShell />
+        <SessionTimeoutModal />
+        <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+      </>
+    );
+  }
+
   // Strictly isolated Student Self-Service Portal (completely separate from employee sidebar & dashboards)
   if (effectiveRole === 'STUDENT') {
     return (
@@ -344,14 +405,60 @@ function PortalShell() {
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
   const currentNav = navItems.find((n) => n.id === activeTab);
+  const isCustomTenant = activeTenantId !== DEFAULT_ZACMA_TENANT_ID;
+  const brandPrimary = activeTenant?.primaryColor || '#0B2545';
+  const brandSecondary = activeTenant?.secondaryColor || '#D97706';
+  const brandDisplayName = activeTenant?.shortName || activeTenant?.name || 'ZACMA Technology';
+  const brandFullName = activeTenant?.name || 'ZACMA Technology';
+  const isTabAllowedByPlan = isNavSectionAllowedByModules(activeTab, activeTenant?.enabledModules);
+  const missingModuleCode = requiredModuleForNavSection(activeTab);
+  const missingModuleDef = missingModuleCode
+    ? ALL_SAAS_MODULES.find((m) => m.code === missingModuleCode)
+    : null;
 
   const SidebarContent = (
     <div className="h-full flex flex-col bg-slate-900 text-slate-200 select-none border-r border-slate-800/80">
-      {/* Subtle Official Royal Blue & Red Brand Top Accent */}
-      <div className="h-1 w-full zacma-brand-stripe shrink-0" />
+      {/* Dynamic Tenant Accent Stripe */}
+      {isCustomTenant ? (
+        <div
+          className="h-1 w-full shrink-0"
+          style={{
+            background: `linear-gradient(90deg, ${brandPrimary}, ${brandSecondary})`,
+          }}
+        />
+      ) : (
+        <div className="h-1 w-full zacma-brand-stripe shrink-0" />
+      )}
       {/* Brand Block */}
       <div className="h-16 px-4 flex items-center justify-between border-b border-slate-800 shrink-0">
-        <ZacmaLogo variant="lockup" theme="dark" size="sm" framed subtitle="& Training Institute" />
+        {!isCustomTenant && !activeTenant?.logoUrl ? (
+          <ZacmaLogo variant="lockup" theme="dark" size="sm" framed subtitle="& Training Institute" />
+        ) : (
+          <div className="flex items-center gap-2.5 min-w-0">
+            {activeTenant?.logoUrl ? (
+              <img
+                src={activeTenant.logoUrl}
+                alt={brandFullName}
+                className="w-9 h-9 rounded-lg object-contain bg-white p-1 shrink-0"
+              />
+            ) : (
+              <div
+                className="w-9 h-9 rounded-lg flex items-center justify-center font-display font-extrabold text-xs text-white shrink-0"
+                style={{ backgroundColor: brandSecondary }}
+              >
+                {brandDisplayName.slice(0, 2).toUpperCase()}
+              </div>
+            )}
+            <div className="min-w-0">
+              <p className="text-xs font-display font-extrabold text-white truncate">
+                {brandDisplayName}
+              </p>
+              <p className="text-[10px] text-slate-400 truncate">
+                {activeTenant?.planName || 'Training Institute Portal'}
+              </p>
+            </div>
+          </div>
+        )}
         <button
           type="button"
           onClick={() => setMobileMenuOpen(false)}
@@ -361,6 +468,20 @@ function PortalShell() {
           <X className="w-5 h-5" />
         </button>
       </div>
+
+      {/* Super Admin Quick Return Button */}
+      {isPlatformUser && !activeSupportSession && (
+        <div className="px-3 pt-3 pb-1 shrink-0">
+          <button
+            type="button"
+            onClick={() => setPortalMode('SUPER_ADMIN')}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-xs font-semibold transition-colors cursor-pointer"
+          >
+            <ArrowLeftRight className="w-3.5 h-3.5" />
+            <span>Super Admin Control Center</span>
+          </button>
+        </div>
+      )}
 
       {/* Navigation Links */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
@@ -374,9 +495,12 @@ function PortalShell() {
                 setActiveTab(item.id);
                 setMobileMenuOpen(false);
               }}
+              style={isActive && isCustomTenant ? { backgroundColor: brandPrimary } : undefined}
               className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${
                 isActive
-                  ? 'bg-blue-700 text-white font-semibold shadow-sm'
+                  ? isCustomTenant
+                    ? 'text-white font-semibold shadow-sm'
+                    : 'bg-blue-700 text-white font-semibold shadow-sm'
                   : 'text-slate-300 hover:bg-white/8 hover:text-white'
               }`}
             >
@@ -411,8 +535,11 @@ function PortalShell() {
               className="w-full px-2.5 py-1.5 text-xs bg-slate-800 border border-slate-700 text-white rounded-lg"
             >
               <option value="ADMIN">Admin</option>
+              <option value="MANAGER">Manager</option>
               <option value="ACCOUNTANT">Accountant</option>
               <option value="INSTRUCTOR">Instructor</option>
+              <option value="RECEPTIONIST">Receptionist</option>
+              <option value="HR_OFFICER">HR Officer</option>
               <option value="GENERAL_STAFF">General Staff</option>
               <option value="STUDENT">Student Portal</option>
             </select>
@@ -421,7 +548,7 @@ function PortalShell() {
         <div className="min-w-0">
           <p className="text-xs font-semibold text-white truncate">{profile.fullName}</p>
           <p className="text-[11px] text-slate-400 truncate">
-            {effectiveRole} · {profile.email}
+            {INSTITUTE_ROLE_LABELS[effectiveRole] || effectiveRole} · {profile.email}
           </p>
         </div>
         <button
@@ -458,6 +585,52 @@ function PortalShell() {
 
       {/* Main Content Area */}
       <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
+        {/* Persistent Authorized Support Access Countdown Banner */}
+        {activeSupportSession && (
+          <div className="bg-amber-500 text-slate-950 px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs font-semibold border-b border-amber-600 no-print">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Clock className="w-4 h-4 shrink-0" />
+              <span className="truncate">
+                AUTHORIZED SUPPORT ACCESS: <strong>{activeSupportSession.tenantName}</strong> — Reason:{' '}
+                <span className="font-normal">{activeSupportSession.reason}</span>
+              </span>
+              {supportCountdown && (
+                <span className="font-mono px-2 py-0.5 rounded bg-slate-950 text-amber-300 text-[11px] tabular-nums shrink-0">
+                  Expires in {supportCountdown}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => void endSupportAccess()}
+              className="px-3 py-1 rounded-md bg-slate-950 hover:bg-slate-800 text-white text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer"
+            >
+              End Support Session &amp; Return to Super Admin
+            </button>
+          </div>
+        )}
+
+        {/* Suspended Tenant Read-Only Lock Banner */}
+        {activeTenant?.status === 'SUSPENDED' && (
+          <div className="bg-red-600 text-white px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs no-print">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>
+                <strong>Account Suspended (Read-Only Mode):</strong>{' '}
+                {activeTenant.suspendedReason ||
+                  'This institute portal has been temporarily suspended by ZACMA Platform Operations. New registrations and financial writes are disabled.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('branding')}
+              className="px-2.5 py-1 rounded bg-white/15 hover:bg-white/25 text-white font-semibold whitespace-nowrap cursor-pointer"
+            >
+              Contact Support
+            </button>
+          </div>
+        )}
+
         {/* Top Bar */}
         <header className="h-16 bg-white/95 backdrop-blur-xs border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-4 sticky top-0 z-20 no-print">
           <div className="flex items-center gap-3 min-w-0">
@@ -469,10 +642,18 @@ function PortalShell() {
             >
               <Menu className="w-5 h-5" />
             </button>
-            <ZacmaLogo variant="mark" size="sm" className="lg:hidden" />
+            {!isCustomTenant && !activeTenant?.logoUrl ? (
+              <ZacmaLogo variant="mark" size="sm" className="lg:hidden" />
+            ) : activeTenant?.logoUrl ? (
+              <img
+                src={activeTenant.logoUrl}
+                alt={brandDisplayName}
+                className="w-7 h-7 rounded object-contain lg:hidden"
+              />
+            ) : null}
             <div className="flex items-center gap-2 text-xs text-slate-500 min-w-0">
               <span className="font-display font-bold text-slate-900 whitespace-nowrap hidden xl:inline">
-                ZACMA Technology
+                {brandDisplayName}
               </span>
               <span className="hidden xl:inline text-slate-300">/</span>
               <span className="font-display font-semibold text-blue-700 truncate">
@@ -481,11 +662,11 @@ function PortalShell() {
             </div>
           </div>
 
-          {/* Unified Staff Search (Name, ID, Course, Date) for Admin, Accountant, Instructor & General Staff */}
+          {/* Unified Staff Search (Name, ID, Course, Date) */}
           <StaffQuickSearch onNavigate={setActiveTab} onOpenReceipt={setActiveReceipt} />
 
           <div className="flex items-center gap-3 shrink-0">
-            {/* Admin Role-Preview Selector (strictly downscopes UI for testing all 5 roles) */}
+            {/* Admin Role-Preview Selector */}
             {actualRole === 'ADMIN' && (
               <div className="hidden md:flex items-center gap-2 text-xs">
                 <span className="text-slate-500 whitespace-nowrap">View as:</span>
@@ -493,6 +674,7 @@ function PortalShell() {
                   {(
                     [
                       { code: 'ADMIN', label: 'Admin' },
+                      { code: 'MANAGER', label: 'Manager' },
                       { code: 'ACCOUNTANT', label: 'Accountant' },
                       { code: 'INSTRUCTOR', label: 'Instructor' },
                       { code: 'GENERAL_STAFF', label: 'Staff' },
@@ -505,7 +687,7 @@ function PortalShell() {
                         key={item.code}
                         type="button"
                         onClick={() => setPreviewRole(item.code === 'ADMIN' ? null : item.code)}
-                        className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
                           active
                             ? 'bg-white text-slate-900 shadow-xs'
                             : 'text-slate-600 hover:text-slate-900'
@@ -540,7 +722,7 @@ function PortalShell() {
         {actualRole === 'ADMIN' && previewRole && (
           <div className="bg-slate-900 text-slate-100 px-6 py-2 flex flex-wrap items-center justify-between gap-2 text-xs no-print">
             <span>
-              Previewing portal workspace as <strong>{previewRole}</strong>. Financial navigation and role actions reflect this role.
+              Previewing portal workspace as <strong>{INSTITUTE_ROLE_LABELS[previewRole] || previewRole}</strong>. Financial navigation and role actions reflect this role.
             </span>
             <button
               type="button"
@@ -554,49 +736,85 @@ function PortalShell() {
 
         {/* Active Module Viewport */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1440px] w-full mx-auto">
-          {activeTab === 'dashboard' && (
-            <DashboardView
-              onNavigate={setActiveTab}
-              onOpenReceipt={setActiveReceipt}
-              onOpenReports={openReportsWithFilter}
-            />
+          {!isTabAllowedByPlan ? (
+            <div className="bg-white border border-slate-200 rounded-xl p-10 max-w-lg mx-auto text-center space-y-4 mt-8">
+              <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center mx-auto">
+                <Lock className="w-6 h-6" />
+              </div>
+              <h2 className="text-lg font-display font-bold text-slate-900">
+                Module Not Included in Current Plan
+              </h2>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                <strong>{missingModuleDef?.label || 'This module'}</strong> is not currently enabled on your{' '}
+                <strong>{activeTenant?.planName || 'current'}</strong> subscription. Your existing records are safely preserved.
+              </p>
+              <div className="flex items-center justify-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dashboard')}
+                  className="px-4 py-2 text-xs font-semibold text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
+                >
+                  Return to Dashboard
+                </button>
+                {effectiveRole === 'ADMIN' && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('branding')}
+                    className="px-4 py-2 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer"
+                  >
+                    Request Plan Upgrade
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <>
+              {activeTab === 'dashboard' && (
+                <DashboardView
+                  onNavigate={setActiveTab}
+                  onOpenReceipt={setActiveReceipt}
+                  onOpenReports={openReportsWithFilter}
+                />
+              )}
+              {activeTab === 'registrations' && <AiRegistrationView />}
+              {activeTab === 'students' && (
+                <StudentsView onOpenAiRegistration={() => setActiveTab('registrations')} />
+              )}
+              {activeTab === 'courses' && <CoursesView />}
+              {activeTab === 'payments' && <PaymentsView onOpenReceipt={setActiveReceipt} />}
+              {activeTab === 'chapa' && (
+                <ChapaPaymentsView
+                  onOpenReceipt={setActiveReceipt}
+                  onOpenReports={() => openReportsWithFilter('ALL')}
+                />
+              )}
+              {activeTab === 'reminders' && <RemindersAndPreferencesView />}
+              {activeTab === 'approvals' && <ApprovalsQueueView />}
+              {activeTab === 'receipts' && <ReceiptsArchiveView onOpenReceipt={setActiveReceipt} />}
+              {activeTab === 'accounting' && (
+                <AccountingView onOpenReports={() => openReportsWithFilter('ALL')} />
+              )}
+              {activeTab === 'reports' && (
+                <FinancialReportsView
+                  key={reportStatusFilter}
+                  initialStatusFilter={reportStatusFilter}
+                />
+              )}
+              {activeTab === 'attendance' && <AttendanceView />}
+              {activeTab === 'messages' && (
+                <MessagingView
+                  onOpenAdminBroadcast={
+                    effectiveRole === 'ADMIN' ? () => setActiveTab('communications') : undefined
+                  }
+                />
+              )}
+              {activeTab === 'communications' && <CommunicationsAdminView />}
+              {activeTab === 'staff' && <StaffRolesView />}
+              {activeTab === 'branding' && <InstituteSettingsView />}
+              {activeTab === 'audit' && <AuditLogsView />}
+              {activeTab === 'setup' && <SetupWizardView />}
+            </>
           )}
-          {activeTab === 'registrations' && <AiRegistrationView />}
-          {activeTab === 'students' && (
-            <StudentsView onOpenAiRegistration={() => setActiveTab('registrations')} />
-          )}
-          {activeTab === 'courses' && <CoursesView />}
-          {activeTab === 'payments' && <PaymentsView onOpenReceipt={setActiveReceipt} />}
-          {activeTab === 'chapa' && (
-            <ChapaPaymentsView
-              onOpenReceipt={setActiveReceipt}
-              onOpenReports={() => openReportsWithFilter('ALL')}
-            />
-          )}
-          {activeTab === 'reminders' && <RemindersAndPreferencesView />}
-          {activeTab === 'approvals' && <ApprovalsQueueView />}
-          {activeTab === 'receipts' && <ReceiptsArchiveView onOpenReceipt={setActiveReceipt} />}
-          {activeTab === 'accounting' && (
-            <AccountingView onOpenReports={() => openReportsWithFilter('ALL')} />
-          )}
-          {activeTab === 'reports' && (
-            <FinancialReportsView
-              key={reportStatusFilter}
-              initialStatusFilter={reportStatusFilter}
-            />
-          )}
-          {activeTab === 'attendance' && <AttendanceView />}
-          {activeTab === 'messages' && (
-            <MessagingView
-              onOpenAdminBroadcast={
-                effectiveRole === 'ADMIN' ? () => setActiveTab('communications') : undefined
-              }
-            />
-          )}
-          {activeTab === 'communications' && <CommunicationsAdminView />}
-          {activeTab === 'staff' && <StaffRolesView />}
-          {activeTab === 'audit' && <AuditLogsView />}
-          {activeTab === 'setup' && <SetupWizardView />}
         </main>
       </div>
 

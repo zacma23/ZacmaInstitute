@@ -34,6 +34,11 @@ const ROLE_STARTER_PROMPTS: Record<RoleCode, string[]> = {
     'Which students currently have overdue installments and what is the total unpaid ETB?',
     'Explain our maker-checker rule for receipts, payments, and expenses.',
   ],
+  MANAGER: [
+    'Summarize active enrollments, courses, and pending approvals for our institute.',
+    'Which students currently have overdue installments?',
+    'How do I review institute attendance and fee collection progress?',
+  ],
   ACCOUNTANT: [
     'How do I register a new student and assign a monthly or 3-month payment plan?',
     'Which students currently have overdue or upcoming installments?',
@@ -44,22 +49,35 @@ const ROLE_STARTER_PROMPTS: Record<RoleCode, string[]> = {
     'Which courses and active student rosters are currently running?',
     'How do I filter attendance reports by course and date?',
   ],
+  RECEPTIONIST: [
+    'How do I register a new student using the AI ID Scanner?',
+    'How do I look up a student by name, ID, or course?',
+    'How do I check a student’s course schedule?',
+  ],
+  HR_OFFICER: [
+    'How do I onboard a new staff member using AI ID OCR?',
+    'Which staff registrations are pending approval?',
+    'How are staff portal roles assigned after approval?',
+  ],
   GENERAL_STAFF: [
-    'What modules can General Staff access in the ZACMA portal?',
+    'What modules can General Staff access in the portal?',
     'How do I look up a student by name, ID, or course?',
     'Who should I direct a student to for fee payments or official receipts?',
   ],
   STUDENT: [
     'What is my current remaining fee balance and next payment deadline?',
-    'How do I view and print my official ZACMA payment receipt?',
+    'How do I view and print my official payment receipt?',
     'Why is my recent payment still showing as pending?',
   ],
 };
 
 const ROLE_PERSONA_LABELS: Record<RoleCode, string> = {
   ADMIN: 'Executive & Finance Advisor',
+  MANAGER: 'Institute Operations Advisor',
   ACCOUNTANT: 'Fee & Receivables Assistant',
   INSTRUCTOR: 'Academic & Attendance Guide',
+  RECEPTIONIST: 'Admissions & Front Desk Helper',
+  HR_OFFICER: 'Staff Onboarding & HR Guide',
   GENERAL_STAFF: 'Campus Operations Helper',
   STUDENT: 'Student Fee & Schedule Guide',
 };
@@ -151,7 +169,12 @@ export function ZacmaAiAssistant() {
     expenses,
     attendance,
     persistedNotifications,
+    activeTenantId,
+    activeTenant,
+    isModuleEnabled,
   } = usePortal();
+
+  const aiEnabled = isModuleEnabled('AI_ASSISTANT');
 
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -167,7 +190,7 @@ export function ZacmaAiAssistant() {
   const abortRef = useRef<AbortController | null>(null);
 
   const storageKey =
-    profile && effectiveRole ? `zacma_ai_chat_${profile.id}_${effectiveRole}` : null;
+    profile && effectiveRole ? `zacma_ai_chat_${activeTenantId}_${profile.id}_${effectiveRole}` : null;
 
   // Restore role-scoped multi-turn session history when user or role changes
   useEffect(() => {
@@ -428,6 +451,8 @@ export function ZacmaAiAssistant() {
     const requestBody = JSON.stringify({
       role: effectiveRole,
       userName: profile.fullName,
+      tenantId: activeTenantId,
+      tenantName: activeTenant?.name || 'ZACMA Technology Training Institute',
       mode,
       message: trimmed,
       history: historyPayload,
@@ -601,6 +626,10 @@ export function ZacmaAiAssistant() {
 
   const starters = ROLE_STARTER_PROMPTS[effectiveRole] || ROLE_STARTER_PROMPTS.GENERAL_STAFF;
   const turnCount = messages.filter((m) => m.role === 'user').length;
+
+  if (!aiEnabled) {
+    return null;
+  }
 
   return (
     <div className="no-print">

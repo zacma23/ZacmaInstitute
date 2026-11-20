@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
+import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -234,13 +235,19 @@ async function createApp() {
     res.status(out.status).json(out.body);
   });
 
+  const httpServer = http.createServer(app);
+
   // Mount Vite middleware in development or serve built dist in production
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
+    const hmrDisabled =
+      process.env.DISABLE_HMR === 'true' || Boolean(process.env.K_SERVICE);
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+        hmr: hmrDisabled ? false : true,
+        watch: hmrDisabled ? null : undefined,
+        ws: { server: httpServer },
       },
       appType: 'spa',
     });
@@ -258,7 +265,7 @@ async function createApp() {
     recordScheduledHeartbeat();
   }, 1000 * 60 * 30);
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`ZACMA Portal server listening on http://0.0.0.0:${PORT}`);
   });
 }

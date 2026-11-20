@@ -11,7 +11,7 @@ import {
   updateProfile,
   User,
 } from 'firebase/auth';
-import { collection, doc, getDoc, onSnapshot, query, setDoc, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, onSnapshot, query, setDoc, updateDoc, where } from 'firebase/firestore';
 import {
   activeFirebaseProjectId,
   auth,
@@ -21,7 +21,7 @@ import {
   OperationType,
 } from '../lib/firebase';
 import { ensureSeededDatabase } from '../lib/seedData';
-import { evaluatePaymentReminders, ReminderEvaluationResult } from '../lib/zacmaService';
+import { ActorContext, evaluatePaymentReminders, ReminderEvaluationResult } from '../lib/zacmaService';
 import {
   DEFAULT_CHANNEL_RULES,
   DEFAULT_SMS_CONFIG,
@@ -34,6 +34,14 @@ import {
   recordLoginHistoryEvent,
 } from '../lib/securityService';
 import { ensureCanonicalZacmaCourses } from '../lib/registrationService';
+import {
+  DEFAULT_PLATFORM_SETTINGS,
+  DEFAULT_ZACMA_TENANT_ID,
+  endSupportAccessSession,
+  ensurePlatformBootstrapped,
+  migrateLegacyZacmaRecordsToTenant,
+  startSupportAccessSession,
+} from '../lib/saasService';
 import {
   AttendanceRecord,
   AuditLog,
@@ -54,10 +62,16 @@ import {
   Payment,
   PaymentInstallment,
   PaymentPlan,
+  PlatformGlobalSettings,
+  PlatformInvoice,
+  PlatformPayment,
+  PlatformRole,
+  PlatformSubscription,
   PortalNotification,
   Receipt,
   RoleCode,
   RoleRecord,
+  SaasModuleCode,
   SchemaMigration,
   SecurityConfig,
   SmsLog,
@@ -67,6 +81,11 @@ import {
   StaffProfile,
   StaffRecord,
   Student,
+  SubscriptionPlan,
+  SupportAccessSession,
+  SupportTicket,
+  TenantInvitation,
+  TenantRecord,
   todayIsoDate,
   addDaysIso,
 } from '../types/zacma';
@@ -102,6 +121,35 @@ interface PortalContextValue {
   }) => Promise<boolean>;
   sendPasswordReset: (email: string) => Promise<boolean>;
   signOutUser: (reason?: 'MANUAL' | 'INACTIVITY_TIMEOUT') => Promise<void>;
+
+  // Multi-Tenant SaaS Platform & Super Admin State
+  isPlatformUser: boolean;
+  platformRole: PlatformRole | null;
+  portalMode: 'SUPER_ADMIN' | 'INSTITUTE';
+  setPortalMode: (mode: 'SUPER_ADMIN' | 'INSTITUTE') => void;
+  activeTenantId: string;
+  activeTenant: TenantRecord | null;
+  tenants: TenantRecord[];
+  subscriptionPlans: SubscriptionPlan[];
+  platformSubscriptions: PlatformSubscription[];
+  platformInvoices: PlatformInvoice[];
+  platformPayments: PlatformPayment[];
+  tenantInvitations: TenantInvitation[];
+  supportSessions: SupportAccessSession[];
+  activeSupportSession: SupportAccessSession | null;
+  startSupportAccess: (tenant: TenantRecord, reason: string, durationMinutes?: number) => Promise<void>;
+  endSupportAccess: () => Promise<void>;
+  platformSettings: PlatformGlobalSettings;
+  supportTickets: SupportTicket[];
+  isModuleEnabled: (moduleCode: SaasModuleCode) => boolean;
+  canWriteInTenant: boolean;
+  actorContext: ActorContext | null;
+  allPlatformStudents: Student[];
+  allPlatformStaffRecords: StaffRecord[];
+  allPlatformPayments: Payment[];
+  allPlatformProfiles: StaffProfile[];
+  allPlatformAuditLogs: AuditLog[];
+  allPlatformCourses: Course[];
 
   sessionWarningOpen: boolean;
   sessionSecondsRemaining: number;
@@ -163,6 +211,20 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [dataLoading, setDataLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  // Multi-Tenant SaaS Platform state
+  const [portalMode, setPortalMode] = useState<'SUPER_ADMIN' | 'INSTITUTE'>('INSTITUTE');
+  const [tenants, setTenants] = useState<TenantRecord[]>([]);
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
+  const [platformSubscriptions, setPlatformSubscriptions] = useState<PlatformSubscription[]>([]);
+  const [platformInvoices, setPlatformInvoices] = useState<PlatformInvoice[]>([]);
+  const [platformPayments, setPlatformPayments] = useState<PlatformPayment[]>([]);
+  const [tenantInvitations, setTenantInvitations] = useState<TenantInvitation[]>([]);
+  const [supportSessions, setSupportSessions] = useState<SupportAccessSession[]>([]);
+  const [activeSupportSession, setActiveSupportSession] = useState<SupportAccessSession | null>(null);
+  const [platformSettings, setPlatformSettings] = useState<PlatformGlobalSettings>(DEFAULT_PLATFORM_SETTINGS);
+  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
+  const legacyMigrationCheckedRef = useRef(false);
 
   const [roles, setRoles] = useState<RoleRecord[]>([]);
   const [staffProfiles, setStaffProfiles] = useState<StaffProfile[]>([]);
@@ -285,9 +347,31 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         let resolved: StaffProfile;
         if (snap.exists()) {
           const d = snap.data();
+          const resolvedPlatformRole: PlatformRole | undefined = isBootstrap
+            ? 'SUPER_ADMIN'
+            : (d.platformRole as PlatformRole | undefined) || undefined;
+          const resolvedTenantId = (d.tenantId as string | undefined) || DEFAULT_ZACMA_TENANT_ID;
+
+          // Ensure bootstrap super admin profile has platformRole & tenantId persisted
+          if (isBootstrap && (d.platformRole !== 'SUPER_ADMIN' || !d.tenantId)) {
+            await setDoc(
+              profileRef,
+              {
+                platformRole: 'SUPER_ADMIN',
+                tenantId: resolvedTenantId,
+                role: 'ADMIN',
+                updatedAt: now,
+              },
+              { merge: true }
+            ).catch(() => undefined);
+          }
+
           resolved = {
             id: snap.id,
             uid: d.uid || firebaseUser.uid,
+            tenantId: resolvedTenantId,
+            platformRole: resolvedPlatformRole,
+            inviteId: d.inviteId,
             email: d.email || firebaseUser.email || '',
             fullName: d.fullName || firebaseUser.displayName || 'ZACMA User',
             phone: d.phone,
@@ -303,37 +387,132 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             updatedAt: d.updatedAt || now,
           };
         } else {
-          const allowedSelfRoles: Array<'INSTRUCTOR' | 'STUDENT'> = [
-            'INSTRUCTOR',
-            'STUDENT',
-          ];
-          const requestedSelfRole =
-            pendingIntent?.role && allowedSelfRoles.includes(pendingIntent.role)
-              ? pendingIntent.role
-              : 'INSTRUCTOR';
-          const initialRole: RoleCode = isBootstrap ? 'ADMIN' : requestedSelfRole;
-          const resolvedName = (
-            pendingIntent?.fullName?.trim() ||
-            firebaseUser.displayName ||
-            firebaseUser.email?.split('@')[0] ||
-            (initialRole === 'STUDENT' ? 'ZACMA Student' : 'ZACMA Staff')
-          ).slice(0, 120);
+          // Check if this user has a pending Institute Admin / Staff invitation
+          let claimedInvite: TenantInvitation | null = null;
+          const userEmailLower = (firebaseUser.email || '').trim().toLowerCase();
+          if (userEmailLower && !isBootstrap) {
+            try {
+              const invSnap = await getDocs(
+                query(
+                  collection(db, 'tenant_invitations'),
+                  where('emailLower', '==', userEmailLower),
+                  where('status', '==', 'PENDING')
+                )
+              );
+              if (!invSnap.empty) {
+                const firstDoc = invSnap.docs[0];
+                claimedInvite = { id: firstDoc.id, ...firstDoc.data() } as TenantInvitation;
+              }
+            } catch {
+              claimedInvite = null;
+            }
+          }
 
-          const newProfile = {
-            uid: firebaseUser.uid,
-            email: firebaseUser.email || '',
-            fullName: resolvedName,
-            role: initialRole,
-            isActive: true,
-            createdAt: now,
-            updatedAt: now,
-          };
-          await setDoc(profileRef, newProfile);
-          resolved = { id: firebaseUser.uid, ...newProfile };
+          if (claimedInvite) {
+            const resolvedName = (
+              pendingIntent?.fullName?.trim() ||
+              claimedInvite.fullName ||
+              firebaseUser.displayName ||
+              userEmailLower.split('@')[0]
+            ).slice(0, 120);
+
+            const invitedProfile: Record<string, unknown> = {
+              uid: firebaseUser.uid,
+              tenantId: claimedInvite.tenantId,
+              inviteId: claimedInvite.id,
+              email: firebaseUser.email || claimedInvite.email,
+              fullName: resolvedName,
+              phone: claimedInvite.phone || undefined,
+              role: claimedInvite.role,
+              isActive: true,
+              createdAt: now,
+              updatedAt: now,
+            };
+            if (!invitedProfile.phone) delete invitedProfile.phone;
+
+            await setDoc(profileRef, invitedProfile);
+            await updateDoc(doc(db, 'tenant_invitations', claimedInvite.id), {
+              status: 'CLAIMED',
+              claimedByUid: firebaseUser.uid,
+              claimedAt: now,
+              updatedAt: now,
+            }).catch(() => undefined);
+
+            resolved = {
+              id: firebaseUser.uid,
+              uid: firebaseUser.uid,
+              tenantId: claimedInvite.tenantId,
+              inviteId: claimedInvite.id,
+              email: firebaseUser.email || claimedInvite.email,
+              fullName: resolvedName,
+              phone: claimedInvite.phone,
+              role: claimedInvite.role,
+              isActive: true,
+              createdAt: now,
+              updatedAt: now,
+            };
+            pushToast('success', `Welcome to ${claimedInvite.tenantName}! Your ${claimedInvite.role} portal is ready.`);
+          } else {
+            const allowedSelfRoles: Array<'INSTRUCTOR' | 'STUDENT'> = [
+              'INSTRUCTOR',
+              'STUDENT',
+            ];
+            const requestedSelfRole =
+              pendingIntent?.role && allowedSelfRoles.includes(pendingIntent.role)
+                ? pendingIntent.role
+                : 'INSTRUCTOR';
+            const initialRole: RoleCode = isBootstrap ? 'ADMIN' : requestedSelfRole;
+            const resolvedName = (
+              pendingIntent?.fullName?.trim() ||
+              firebaseUser.displayName ||
+              firebaseUser.email?.split('@')[0] ||
+              (initialRole === 'STUDENT' ? 'ZACMA Student' : 'ZACMA Staff')
+            ).slice(0, 120);
+
+            const newProfile: Record<string, unknown> = {
+              uid: firebaseUser.uid,
+              tenantId: DEFAULT_ZACMA_TENANT_ID,
+              email: firebaseUser.email || '',
+              fullName: resolvedName,
+              role: initialRole,
+              isActive: true,
+              createdAt: now,
+              updatedAt: now,
+            };
+            if (isBootstrap) {
+              newProfile.platformRole = 'SUPER_ADMIN';
+            }
+            await setDoc(profileRef, newProfile);
+            resolved = {
+              id: firebaseUser.uid,
+              uid: firebaseUser.uid,
+              tenantId: DEFAULT_ZACMA_TENANT_ID,
+              platformRole: isBootstrap ? 'SUPER_ADMIN' : undefined,
+              email: firebaseUser.email || '',
+              fullName: resolvedName,
+              role: initialRole,
+              isActive: true,
+              createdAt: now,
+              updatedAt: now,
+            };
+          }
         }
 
         setProfile(resolved);
-        if (resolved.role === 'ADMIN') {
+
+        if (resolved.platformRole) {
+          setPortalMode('SUPER_ADMIN');
+          await ensurePlatformBootstrapped({
+            uid: resolved.uid,
+            fullName: resolved.fullName,
+            role: resolved.role,
+            platformRole: resolved.platformRole,
+          });
+        } else {
+          setPortalMode('INSTITUTE');
+        }
+
+        if (resolved.role === 'ADMIN' && (resolved.tenantId || DEFAULT_ZACMA_TENANT_ID) === DEFAULT_ZACMA_TENANT_ID) {
           await ensureSeededDatabase(resolved.uid, resolved.fullName);
         }
       } catch (err) {
@@ -347,25 +526,125 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     return () => unsubscribe();
   }, []);
 
+  const platformRole: PlatformRole | null = profile?.platformRole ?? null;
+  const isPlatformUser = Boolean(platformRole);
   const actualRole: RoleCode | null = profile?.role ?? null;
   const effectiveRole: RoleCode | null =
     actualRole === 'ADMIN' && previewRole ? previewRole : actualRole;
+
+  const activeTenantId: string = useMemo(() => {
+    if (activeSupportSession) return activeSupportSession.tenantId;
+    return profile?.tenantId || DEFAULT_ZACMA_TENANT_ID;
+  }, [activeSupportSession, profile?.tenantId]);
+
+  const activeTenant: TenantRecord | null = useMemo(() => {
+    const found = tenants.find((t) => t.tenantId === activeTenantId || t.id === activeTenantId);
+    if (found) return found;
+    return null;
+  }, [tenants, activeTenantId]);
+
+  const isModuleEnabled = useCallback(
+    (moduleCode: SaasModuleCode): boolean => {
+      if (!activeTenant) return true;
+      if (!activeTenant.enabledModules || activeTenant.enabledModules.length === 0) return true;
+      return activeTenant.enabledModules.includes(moduleCode);
+    },
+    [activeTenant]
+  );
+
+  const canWriteInTenant = useMemo(() => {
+    if (!activeTenant) return true;
+    return activeTenant.status !== 'SUSPENDED';
+  }, [activeTenant]);
+
+  const actorContext: ActorContext | null = useMemo(() => {
+    if (!profile || !actualRole) return null;
+    return {
+      uid: profile.uid,
+      fullName: profile.fullName,
+      role: actualRole,
+      tenantId: activeTenantId,
+      studentIdPrefix: activeTenant?.studentIdPrefix,
+      staffIdPrefix: activeTenant?.staffIdPrefix,
+      receiptPrefix: activeTenant?.receiptPrefix,
+      studentLimit: activeTenant?.studentLimit,
+      staffLimit: activeTenant?.staffLimit,
+      tenantStatus: activeTenant?.status,
+    };
+  }, [profile, actualRole, activeTenantId, activeTenant]);
+
+  const startSupportAccess = useCallback(
+    async (tenant: TenantRecord, reason: string, durationMinutes = 30) => {
+      if (!profile || !platformRole) {
+        throw new Error('Only authorized platform staff can open a support session.');
+      }
+      const session = await startSupportAccessSession(tenant, reason, durationMinutes, {
+        uid: profile.uid,
+        fullName: profile.fullName,
+        role: profile.role,
+        platformRole,
+      });
+      setActiveSupportSession(session);
+      setPreviewRole(null);
+      setPortalMode('INSTITUTE');
+      pushToast('info', `Authorized Support Access opened for ${tenant.name} (${durationMinutes} min).`);
+    },
+    [profile, platformRole]
+  );
+
+  const endSupportAccess = useCallback(async () => {
+    if (activeSupportSession && profile && platformRole) {
+      await endSupportAccessSession(activeSupportSession, {
+        uid: profile.uid,
+        fullName: profile.fullName,
+        role: profile.role,
+        platformRole,
+      }).catch(() => undefined);
+      pushToast('info', `Support session for ${activeSupportSession.tenantName} ended.`);
+    }
+    setActiveSupportSession(null);
+    if (isPlatformUser) {
+      setPortalMode('SUPER_ADMIN');
+    }
+  }, [activeSupportSession, profile, platformRole, isPlatformUser]);
+
+  // Auto-end support access session when time limit expires
+  useEffect(() => {
+    if (!activeSupportSession) return;
+    const msLeft = new Date(activeSupportSession.expiresAt).getTime() - Date.now();
+    if (msLeft <= 0) {
+      void endSupportAccess();
+      return;
+    }
+    const t = window.setTimeout(() => {
+      pushToast('info', `Support access session for ${activeSupportSession.tenantName} expired automatically.`);
+      void endSupportAccess();
+    }, msLeft);
+    return () => window.clearTimeout(t);
+  }, [activeSupportSession, endSupportAccess]);
 
   useEffect(() => {
     if (!user || !profile || !actualRole) return;
 
     setDataLoading(true);
     const unsubs: Array<() => void> = [];
+    const userTenantId = profile.tenantId || DEFAULT_ZACMA_TENANT_ID;
 
+    // Platform users read across tenants (enforced by firestore.rules); institute users query strictly their tenantId
     const subscribe = <T extends { id: string }>(
       colName: string,
       setter: React.Dispatch<React.SetStateAction<T[]>>,
-      sortFn?: (a: T, b: T) => number
+      sortFn?: (a: T, b: T) => number,
+      forceUnscoped = false
     ) => {
+      const refOrQuery =
+        isPlatformUser || forceUnscoped
+          ? collection(db, colName)
+          : query(collection(db, colName), where('tenantId', '==', userTenantId));
       const unsub = onSnapshot(
-        collection(db, colName),
+        refOrQuery,
         (snapshot) => {
-          const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as T);
+          const rows = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }) as T);
           if (sortFn) rows.sort(sortFn);
           setter(rows);
         },
@@ -375,6 +654,60 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       );
       unsubs.push(unsub);
     };
+
+    // Multi-Tenant SaaS Platform Subscriptions
+    if (isPlatformUser) {
+      subscribe<TenantRecord>('tenants', setTenants, (a, b) => b.createdAt.localeCompare(a.createdAt), true);
+      subscribe<SubscriptionPlan>('subscription_plans', setSubscriptionPlans, (a, b) => a.monthlyPriceEtb - b.monthlyPriceEtb, true);
+      subscribe<PlatformSubscription>('platform_subscriptions', setPlatformSubscriptions, (a, b) => b.updatedAt.localeCompare(a.updatedAt), true);
+      subscribe<PlatformInvoice>('platform_invoices', setPlatformInvoices, (a, b) => b.createdAt.localeCompare(a.createdAt), true);
+      subscribe<PlatformPayment>('platform_payments', setPlatformPayments, (a, b) => b.createdAt.localeCompare(a.createdAt), true);
+      subscribe<TenantInvitation>('tenant_invitations', setTenantInvitations, (a, b) => b.createdAt.localeCompare(a.createdAt), true);
+      subscribe<SupportAccessSession>('support_access_sessions', setSupportSessions, (a, b) => b.startedAt.localeCompare(a.startedAt), true);
+      subscribe<SupportTicket>('support_tickets', setSupportTickets, (a, b) => b.createdAt.localeCompare(a.createdAt), true);
+
+      const platSetUnsub = onSnapshot(
+        doc(db, 'platform_settings', 'default'),
+        (snap) => {
+          if (snap.exists()) {
+            setPlatformSettings({ id: snap.id, ...snap.data() } as PlatformGlobalSettings);
+          } else {
+            setPlatformSettings(DEFAULT_PLATFORM_SETTINGS);
+          }
+        },
+        () => setPlatformSettings(DEFAULT_PLATFORM_SETTINGS)
+      );
+      unsubs.push(platSetUnsub);
+    } else {
+      // Institute user: subscribe strictly to their own tenant doc, plans catalog, and tenant-scoped subscription/invoices/tickets
+      const myTenantUnsub = onSnapshot(
+        doc(db, 'tenants', userTenantId),
+        (snap) => {
+          if (snap.exists()) {
+            setTenants([{ id: snap.id, ...snap.data() } as TenantRecord]);
+          } else {
+            setTenants([]);
+          }
+        },
+        () => setTenants([])
+      );
+      unsubs.push(myTenantUnsub);
+
+      subscribe<SubscriptionPlan>('subscription_plans', setSubscriptionPlans, (a, b) => a.monthlyPriceEtb - b.monthlyPriceEtb, true);
+
+      if (actualRole === 'ADMIN' || actualRole === 'MANAGER' || actualRole === 'ACCOUNTANT') {
+        subscribe<PlatformSubscription>('platform_subscriptions', setPlatformSubscriptions, (a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        subscribe<PlatformInvoice>('platform_invoices', setPlatformInvoices, (a, b) => b.createdAt.localeCompare(a.createdAt));
+        subscribe<SupportTicket>('support_tickets', setSupportTickets, (a, b) => b.createdAt.localeCompare(a.createdAt));
+      } else {
+        setPlatformSubscriptions([]);
+        setPlatformInvoices([]);
+        setSupportTickets([]);
+      }
+      setPlatformPayments([]);
+      setTenantInvitations([]);
+      setSupportSessions([]);
+    }
 
     // Always subscribe to own notification preferences
     const prefUnsub = onSnapshot(
@@ -452,15 +785,20 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     );
     unsubs.push(loginHistUnsub);
 
-    // PII-free Messaging Directory (Admin reads all; non-admin reads active only per rules)
-    const dirQuery =
-      actualRole === 'ADMIN'
-        ? collection(db, 'directory_users')
-        : query(collection(db, 'directory_users'), where('isActive', '==', true));
+    // PII-free Messaging Directory (Platform reads all; Institute reads scoped by tenantId)
+    const dirQuery = isPlatformUser
+      ? collection(db, 'directory_users')
+      : actualRole === 'ADMIN'
+      ? query(collection(db, 'directory_users'), where('tenantId', '==', userTenantId))
+      : query(
+          collection(db, 'directory_users'),
+          where('tenantId', '==', userTenantId),
+          where('isActive', '==', true)
+        );
     const dirUnsub = onSnapshot(
       dirQuery,
       (snapshot) => {
-        const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as DirectoryUser);
+        const rows = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }) as DirectoryUser);
         rows.sort((a, b) => a.fullName.localeCompare(b.fullName));
         setDirectoryUsers(rows);
       },
@@ -686,8 +1024,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
-    // Core staff collections (readable by Admin, Accountant, Instructor, General Staff)
-    subscribe<RoleRecord>('roles', setRoles);
+    // Core staff collections (readable by Admin, Manager, Accountant, Instructor, Receptionist, HR Officer, General Staff)
+    subscribe<RoleRecord>('roles', setRoles, undefined, true);
     subscribe<Course>('courses', setCourses, (a, b) => a.name.localeCompare(b.name));
     subscribe<Student>('students', setStudents, (a, b) =>
       b.studentCode.localeCompare(a.studentCode)
@@ -716,8 +1054,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     );
     unsubs.push(rulesUnsub);
 
-    // Finance-restricted collections (Strictly excluded for Instructors and General Staff)
-    if (actualRole === 'ADMIN' || actualRole === 'ACCOUNTANT') {
+    // Finance-restricted collections (Strictly excluded for Instructors, HR, Receptionist, General Staff)
+    if (actualRole === 'ADMIN' || actualRole === 'MANAGER' || actualRole === 'ACCOUNTANT' || isPlatformUser) {
       subscribe<PaymentPlan>('payment_plans', setPaymentPlans, (a, b) =>
         a.installmentCount - b.installmentCount
       );
@@ -788,7 +1126,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Admin-only collections (Staff directory PII, Encrypted ID Vault, Salary Isolation, Audit Trail)
-    if (actualRole === 'ADMIN') {
+    if (actualRole === 'ADMIN' || isPlatformUser) {
       subscribe<StaffProfile>('profiles', setStaffProfiles, (a, b) =>
         a.fullName.localeCompare(b.fullName)
       );
@@ -805,8 +1143,20 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         b.createdAt.localeCompare(a.createdAt)
       );
       subscribe<SchemaMigration>('schema_migrations', setSchemaMigrations, (a, b) =>
-        a.version.localeCompare(b.version)
+        a.version.localeCompare(b.version),
+        true
       );
+    } else if (actualRole === 'MANAGER' || actualRole === 'HR_OFFICER') {
+      subscribe<StaffProfile>('profiles', setStaffProfiles, (a, b) =>
+        a.fullName.localeCompare(b.fullName)
+      );
+      subscribe<StaffRecord>('staff_records', setStaffRecords, (a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
+      setStaffCompensations([]);
+      setIdentityDocuments([]);
+      setAuditLogs([]);
+      setSchemaMigrations([]);
     } else if (actualRole === 'ACCOUNTANT') {
       setStaffProfiles([profile]);
       setStaffCompensations([]);
@@ -846,20 +1196,68 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       window.clearTimeout(timer);
       unsubs.forEach((u) => u());
     };
-  }, [user, profile, actualRole]);
+  }, [user, profile, actualRole, isPlatformUser]);
+
+  // Idempotent background legacy ZACMA tagging when Super Admin signs in so all pre-existing docs carry tenantId='zacma_default'
+  useEffect(() => {
+    if (
+      !dataLoading &&
+      isPlatformUser &&
+      profile &&
+      !legacyMigrationCheckedRef.current &&
+      (students.some((s) => !s.tenantId) || courses.some((c) => !c.tenantId))
+    ) {
+      legacyMigrationCheckedRef.current = true;
+      void migrateLegacyZacmaRecordsToTenant({
+        uid: profile.uid,
+        fullName: profile.fullName,
+        role: profile.role,
+        platformRole: profile.platformRole,
+      }).catch(() => undefined);
+    }
+  }, [dataLoading, isPlatformUser, profile, students, courses]);
+
+  // Tenant-scoped projections: Institute modules always read strictly activeTenantId records,
+  // while Super Admin Control Center reads allPlatform* aggregates.
+  const belongsToActiveTenant = useCallback(
+    (row: { tenantId?: string }) => (row.tenantId || DEFAULT_ZACMA_TENANT_ID) === activeTenantId,
+    [activeTenantId]
+  );
+
+  const scopedStaffProfiles = useMemo(() => staffProfiles.filter(belongsToActiveTenant), [staffProfiles, belongsToActiveTenant]);
+  const scopedStaffRecords = useMemo(() => staffRecords.filter(belongsToActiveTenant), [staffRecords, belongsToActiveTenant]);
+  const scopedStaffCompensations = useMemo(() => staffCompensations.filter(belongsToActiveTenant), [staffCompensations, belongsToActiveTenant]);
+  const scopedIdentityDocuments = useMemo(() => identityDocuments.filter(belongsToActiveTenant), [identityDocuments, belongsToActiveTenant]);
+  const scopedCourses = useMemo(() => courses.filter(belongsToActiveTenant), [courses, belongsToActiveTenant]);
+  const scopedPaymentPlans = useMemo(() => paymentPlans.filter(belongsToActiveTenant), [paymentPlans, belongsToActiveTenant]);
+  const scopedStudents = useMemo(() => students.filter(belongsToActiveTenant), [students, belongsToActiveTenant]);
+  const scopedEnrollments = useMemo(() => enrollments.filter(belongsToActiveTenant), [enrollments, belongsToActiveTenant]);
+  const scopedInstallments = useMemo(() => installments.filter(belongsToActiveTenant), [installments, belongsToActiveTenant]);
+  const scopedPayments = useMemo(() => payments.filter(belongsToActiveTenant), [payments, belongsToActiveTenant]);
+  const scopedChapaTransactions = useMemo(() => chapaTransactions.filter(belongsToActiveTenant), [chapaTransactions, belongsToActiveTenant]);
+  const scopedReceipts = useMemo(() => receipts.filter(belongsToActiveTenant), [receipts, belongsToActiveTenant]);
+  const scopedExpenseCategories = useMemo(() => expenseCategories.filter(belongsToActiveTenant), [expenseCategories, belongsToActiveTenant]);
+  const scopedExpenses = useMemo(() => expenses.filter(belongsToActiveTenant), [expenses, belongsToActiveTenant]);
+  const scopedFinancialAdjustments = useMemo(() => financialAdjustments.filter(belongsToActiveTenant), [financialAdjustments, belongsToActiveTenant]);
+  const scopedAttendance = useMemo(() => attendance.filter(belongsToActiveTenant), [attendance, belongsToActiveTenant]);
+  const scopedPersistedNotifications = useMemo(() => persistedNotifications.filter(belongsToActiveTenant), [persistedNotifications, belongsToActiveTenant]);
+  const scopedAuditLogs = useMemo(() => auditLogs.filter(belongsToActiveTenant), [auditLogs, belongsToActiveTenant]);
+  const scopedSmsLogs = useMemo(() => smsLogs.filter(belongsToActiveTenant), [smsLogs, belongsToActiveTenant]);
+  const scopedDirectoryUsers = useMemo(() => directoryUsers.filter(belongsToActiveTenant), [directoryUsers, belongsToActiveTenant]);
+  const scopedConversations = useMemo(() => conversations.filter(belongsToActiveTenant), [conversations, belongsToActiveTenant]);
 
   // Sync own PII-free presence into directory_users on login and every 3 minutes
   useEffect(() => {
     if (!user || !profile) return;
     const linkedStudent = profile.linkedStudentId
-      ? students.find((s) => s.id === profile.linkedStudentId)
+      ? scopedStudents.find((s) => s.id === profile.linkedStudentId)
       : undefined;
     void syncOwnDirectoryPresence(profile, linkedStudent);
     const interval = window.setInterval(() => {
       void syncOwnDirectoryPresence(profile, linkedStudent);
     }, 180_000);
     return () => window.clearInterval(interval);
-  }, [user, profile, students]);
+  }, [user, profile, scopedStudents]);
 
   // Idempotently initialize SMS defaults, templates, channel rules & staff directory once per Admin session
   useEffect(() => {
@@ -868,40 +1266,43 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       !commDefaultsEnsuredRef.current &&
       profile &&
       actualRole === 'ADMIN' &&
-      staffProfiles.length > 0
+      activeTenantId === DEFAULT_ZACMA_TENANT_ID &&
+      scopedStaffProfiles.length > 0
     ) {
       commDefaultsEnsuredRef.current = true;
       void ensureCommunicationDefaults(
         { uid: profile.uid, fullName: profile.fullName, role: actualRole },
-        staffProfiles,
-        students
+        scopedStaffProfiles,
+        scopedStudents
       );
     }
-  }, [dataLoading, profile, actualRole, staffProfiles, students]);
+  }, [dataLoading, profile, actualRole, activeTenantId, scopedStaffProfiles, scopedStudents]);
 
-  // Idempotently ensure all 18 canonical ZACMA Technology courses exist in the dynamic catalog
+  // Idempotently ensure all 18 canonical ZACMA Technology courses exist for the flagship ZACMA tenant only
   useEffect(() => {
     if (
       !dataLoading &&
       !canonicalCoursesSyncedRef.current &&
       profile &&
-      actualRole === 'ADMIN'
+      actualRole === 'ADMIN' &&
+      activeTenantId === DEFAULT_ZACMA_TENANT_ID
     ) {
       canonicalCoursesSyncedRef.current = true;
-      void ensureCanonicalZacmaCourses(courses, {
+      void ensureCanonicalZacmaCourses(scopedCourses, {
         uid: profile.uid,
         fullName: profile.fullName,
         role: actualRole,
+        tenantId: DEFAULT_ZACMA_TENANT_ID,
       });
     }
-  }, [dataLoading, profile, actualRole, courses]);
+  }, [dataLoading, profile, actualRole, activeTenantId, scopedCourses]);
 
   const unreadMessagesCount = useMemo(() => {
     if (!user) return 0;
-    return conversations.filter(
+    return scopedConversations.filter(
       (c) => Boolean(c.lastMessageAt) && !c.readByUids.includes(user.uid)
     ).length;
-  }, [conversations, user]);
+  }, [scopedConversations, user]);
 
   // Default preview student when Admin switches to STUDENT preview
   useEffect(() => {
@@ -1605,42 +2006,69 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         signUpWithEmail,
         sendPasswordReset,
         signOutUser,
+        isPlatformUser,
+        platformRole,
+        portalMode,
+        setPortalMode,
+        activeTenantId,
+        activeTenant,
+        tenants,
+        subscriptionPlans,
+        platformSubscriptions,
+        platformInvoices,
+        platformPayments,
+        tenantInvitations,
+        supportSessions,
+        activeSupportSession,
+        startSupportAccess,
+        endSupportAccess,
+        platformSettings,
+        supportTickets,
+        isModuleEnabled,
+        canWriteInTenant,
+        actorContext,
+        allPlatformStudents: students,
+        allPlatformStaffRecords: staffRecords,
+        allPlatformPayments: payments,
+        allPlatformProfiles: staffProfiles,
+        allPlatformAuditLogs: auditLogs,
+        allPlatformCourses: courses,
         sessionWarningOpen,
         sessionSecondsRemaining,
         sessionExpiredNotice,
         clearSessionExpiredNotice,
         continueSession,
         roles,
-        staffProfiles,
-        staffRecords,
-        staffCompensations,
-        identityDocuments,
-        courses,
-        paymentPlans,
-        students,
-        enrollments,
-        installments,
-        payments,
-        chapaTransactions,
-        receipts,
-        expenseCategories,
-        expenses,
-        financialAdjustments,
-        attendance,
+        staffProfiles: scopedStaffProfiles,
+        staffRecords: scopedStaffRecords,
+        staffCompensations: scopedStaffCompensations,
+        identityDocuments: scopedIdentityDocuments,
+        courses: scopedCourses,
+        paymentPlans: scopedPaymentPlans,
+        students: scopedStudents,
+        enrollments: scopedEnrollments,
+        installments: scopedInstallments,
+        payments: scopedPayments,
+        chapaTransactions: scopedChapaTransactions,
+        receipts: scopedReceipts,
+        expenseCategories: scopedExpenseCategories,
+        expenses: scopedExpenses,
+        financialAdjustments: scopedFinancialAdjustments,
+        attendance: scopedAttendance,
         notifications,
-        persistedNotifications,
+        persistedNotifications: scopedPersistedNotifications,
         notificationPrefs,
         schemaMigrations,
-        auditLogs,
+        auditLogs: scopedAuditLogs,
         securityConfig,
         loginHistory,
         smsConfig,
         communicationPolicy,
         smsTemplates,
-        smsLogs,
+        smsLogs: scopedSmsLogs,
         channelRules,
-        directoryUsers,
-        conversations,
+        directoryUsers: scopedDirectoryUsers,
+        conversations: scopedConversations,
         unreadMessagesCount,
         lastReminderRun,
         runningReminders,

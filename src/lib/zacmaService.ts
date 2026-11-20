@@ -54,6 +54,25 @@ export interface ActorContext {
   uid: string;
   fullName: string;
   role: RoleCode;
+  tenantId?: string;
+  studentIdPrefix?: string;
+  staffIdPrefix?: string;
+  receiptPrefix?: string;
+  studentLimit?: number;
+  staffLimit?: number;
+  tenantStatus?: string;
+}
+
+const DEFAULT_TENANT_ID = 'zacma_default';
+
+function resolveTenantId(actor: ActorContext): string {
+  return actor.tenantId || DEFAULT_TENANT_ID;
+}
+
+function assertTenantWritable(actor: ActorContext): void {
+  if (actor.tenantStatus === 'SUSPENDED') {
+    throw new Error('This training institute account is currently SUSPENDED. Contact ZACMA Platform Support to reactivate.');
+  }
 }
 
 export interface RegisterStudentInput {
@@ -73,9 +92,10 @@ export interface RegisterStudentInput {
   initialTransactionRef?: string;
 }
 
-export function computeNextStudentCode(existingStudents: Student[]): string {
+export function computeNextStudentCode(existingStudents: Student[], customPrefix?: string): string {
   const year = new Date().getFullYear();
-  const prefix = `ZAC-${year}-`;
+  const basePrefix = customPrefix && customPrefix !== 'ZAC-STU' ? customPrefix.replace(/-+$/, '') : `ZAC-${year}`;
+  const prefix = `${basePrefix}-`;
   let maxSeq = 0;
   for (const s of existingStudents) {
     if (s.studentCode.startsWith(prefix)) {
@@ -86,9 +106,10 @@ export function computeNextStudentCode(existingStudents: Student[]): string {
   return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
 }
 
-export function computeNextReceiptNumber(existingReceiptsCount: number): string {
+export function computeNextReceiptNumber(existingReceiptsCount: number, customPrefix?: string): string {
   const year = new Date().getFullYear();
-  return `RCP-${year}-${String(existingReceiptsCount + 1).padStart(4, '0')}`;
+  const base = customPrefix && customPrefix.trim() ? customPrefix.trim().replace(/-+$/, '') : 'RCP';
+  return `${base}-${year}-${String(existingReceiptsCount + 1).padStart(4, '0')}`;
 }
 
 export async function registerStudentWithPlan(
@@ -96,10 +117,17 @@ export async function registerStudentWithPlan(
   existingStudents: Student[],
   actor: ActorContext
 ): Promise<{ studentId: string; studentCode: string }> {
+  assertTenantWritable(actor);
+  if (actor.studentLimit && actor.studentLimit > 0 && existingStudents.length >= actor.studentLimit) {
+    throw new Error(
+      `Student capacity limit (${actor.studentLimit}) reached for your current subscription plan. Please upgrade your plan to register more students.`
+    );
+  }
+  const tenantId = resolveTenantId(actor);
   const now = new Date().toISOString();
   const studentId = makeId('stu');
   const enrollmentId = makeId('enr');
-  const studentCode = computeNextStudentCode(existingStudents);
+  const studentCode = computeNextStudentCode(existingStudents, actor.studentIdPrefix);
 
   if (input.initialPaymentAmount && input.initialPaymentAmount > 0) {
     if (!input.initialTransactionRef || !/^[A-Za-z0-9\-_]+$/.test(input.initialTransactionRef.trim())) {
@@ -119,6 +147,7 @@ export async function registerStudentWithPlan(
     const registrationTimeEat = formatAddisTime(now);
 
     const studentDoc = cleanObject({
+      tenantId,
       studentCode,
       fullName: input.fullName.trim().slice(0, 120),
       gender: input.gender,
@@ -142,6 +171,7 @@ export async function registerStudentWithPlan(
     batch.set(doc(db, 'students', studentId), studentDoc);
 
     const enrollmentDoc = cleanObject({
+      tenantId,
       studentId,
       studentCode,
       studentName: input.fullName.trim().slice(0, 120),
@@ -180,6 +210,7 @@ export async function registerStudentWithPlan(
       const dueDate = addDaysIso(input.enrollmentDate, (i - 1) * interval);
       const instId = makeId(`inst_${i}`);
       batch.set(doc(db, 'payment_installments', instId), {
+        tenantId,
         enrollmentId,
         studentId,
         studentCode,
@@ -204,6 +235,7 @@ export async function registerStudentWithPlan(
       batch.set(
         doc(db, 'payments', paymentId),
         cleanObject({
+          tenantId,
           transactionRef: txRef,
           enrollmentId,
           studentId,
@@ -223,6 +255,7 @@ export async function registerStudentWithPlan(
         })
       );
       batch.set(doc(db, 'payment_refs', refId), {
+        tenantId,
         paymentId,
         transactionRef: txRef,
         recordedBy: actor.uid,
@@ -232,6 +265,7 @@ export async function registerStudentWithPlan(
 
     // Notification for Admin
     batch.set(doc(db, 'notifications', makeId('not')), {
+      tenantId,
       type: 'PENDING_REGISTRATION',
       title: `New Registration: ${input.fullName.trim().slice(0, 60)}`,
       message: `${studentCode} registered for ${input.course.name} by ${actor.fullName}. Pending admin approval.`,
@@ -244,6 +278,7 @@ export async function registerStudentWithPlan(
 
     // Audit Log
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
+      tenantId,
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
       actorRole: actor.role,
@@ -403,11 +438,14 @@ export async function saveCourse(
   if (actor.role !== 'ADMIN') {
     throw new Error('Only administrators can create or modify courses.');
   }
+  assertTenantWritable(actor);
+  const tenantId = resolveTenantId(actor);
   const now = new Date().toISOString();
   const courseId = courseData.id || makeId('crs');
   try {
     const batch = writeBatch(db);
     const payload = cleanObject({
+      tenantId,
       code: courseData.code.trim().toUpperCase().slice(0, 24),
       name: courseData.name.trim().slice(0, 120),
       category: courseData.category.trim().slice(0, 80),
@@ -424,6 +462,7 @@ export async function saveCourse(
 
     batch.set(doc(db, 'courses', courseId), payload);
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
+      tenantId,
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
       actorRole: actor.role,
@@ -450,6 +489,8 @@ export async function submitPaymentRecord(
   },
   actor: ActorContext
 ): Promise<void> {
+  assertTenantWritable(actor);
+  const tenantId = input.enrollment.tenantId || resolveTenantId(actor);
   const txRef = input.transactionRef.trim();
   if (!/^[A-Za-z0-9\-_]+$/.test(txRef)) {
     throw new Error('Transaction reference must contain only letters, numbers, hyphens, or underscores.');
@@ -472,6 +513,7 @@ export async function submitPaymentRecord(
     batch.set(
       doc(db, 'payments', paymentId),
       cleanObject({
+        tenantId,
         transactionRef: txRef,
         enrollmentId: input.enrollment.id,
         studentId: input.enrollment.studentId,
@@ -492,6 +534,7 @@ export async function submitPaymentRecord(
     );
 
     batch.set(doc(db, 'payment_refs', refId), {
+      tenantId,
       paymentId,
       transactionRef: txRef,
       recordedBy: actor.uid,
@@ -501,6 +544,7 @@ export async function submitPaymentRecord(
     batch.set(
       doc(db, 'notifications', makeId('not')),
       cleanObject({
+        tenantId,
         type: 'PENDING_PAYMENT',
         title: `Payment Pending Approval (${txRef})`,
         message: `${input.enrollment.studentName} — ETB ${input.amountEtb.toLocaleString()} via ${input.paymentMethod}, recorded by ${actor.fullName}.`,
@@ -523,6 +567,7 @@ export async function submitPaymentRecord(
     batch.set(
       doc(db, 'notifications', makeId('not_stu')),
       cleanObject({
+        tenantId,
         type: 'PAYMENT_RECEIVED',
         title: `Payment Received — Awaiting Verification (${txRef})`,
         message: `We recorded your ETB ${input.amountEtb.toLocaleString()} ${input.paymentMethod} submission for ${input.enrollment.courseName}. Your balance will update once verified by Admin.`,
@@ -543,6 +588,7 @@ export async function submitPaymentRecord(
     );
 
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
+      tenantId,
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
       actorRole: actor.role,
@@ -577,10 +623,12 @@ export async function approvePaymentTransaction(
     throw new Error('Only pending payments can be approved.');
   }
 
+  assertTenantWritable(actor);
+  const tenantId = payment.tenantId || enrollment.tenantId || resolveTenantId(actor);
   const now = new Date().toISOString();
   const today = todayIsoDate();
   const receiptId = makeId('rcp');
-  const receiptNumber = computeNextReceiptNumber(existingReceiptsCount);
+  const receiptNumber = computeNextReceiptNumber(existingReceiptsCount, actor.receiptPrefix);
 
   const previousBalance = Math.max(0, Number(enrollment.remainingBalanceEtb));
   const newApprovedPaid = Number((enrollment.approvedPaidEtb + payment.amountEtb).toFixed(2));
@@ -649,6 +697,7 @@ export async function approvePaymentTransaction(
     batch.set(
       doc(db, 'receipts', receiptId),
       cleanObject({
+        tenantId,
         receiptNumber,
         paymentId: payment.id,
         transactionRef: payment.transactionRef,
@@ -715,6 +764,7 @@ export async function approvePaymentTransaction(
 
     // 6. Append Immutable Audit Log
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
+      tenantId,
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
       actorRole: actor.role,
@@ -890,6 +940,8 @@ export async function createExpenseRecord(
   if (actor.role !== 'ADMIN') {
     throw new Error('Only administrators can record institutional expenses.');
   }
+  assertTenantWritable(actor);
+  const tenantId = resolveTenantId(actor);
   const now = new Date().toISOString();
   const expId = makeId('exp');
   try {
@@ -897,6 +949,7 @@ export async function createExpenseRecord(
     batch.set(
       doc(db, 'expenses', expId),
       cleanObject({
+        tenantId,
         categoryId: input.category.id,
         categoryName: input.category.name.slice(0, 80),
         title: input.title.trim().slice(0, 140),
@@ -911,6 +964,7 @@ export async function createExpenseRecord(
       })
     );
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
+      tenantId,
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
       actorRole: actor.role,
@@ -933,11 +987,14 @@ export async function createExpenseCategory(
   if (actor.role !== 'ADMIN') {
     throw new Error('Only administrators can create expense categories.');
   }
+  assertTenantWritable(actor);
+  const tenantId = resolveTenantId(actor);
   const catId = makeId('expcat');
   try {
     await setDoc(
       doc(db, 'expense_categories', catId),
       cleanObject({
+        tenantId,
         name: input.name.trim().slice(0, 80),
         description: input.description?.trim().slice(0, 240),
         isActive: true,
@@ -986,6 +1043,8 @@ export async function saveDailyAttendanceBatch(
   if (actor.role !== 'ADMIN' && actor.role !== 'INSTRUCTOR') {
     throw new Error('Only instructors and administrators can record attendance.');
   }
+  assertTenantWritable(actor);
+  const tenantId = course.tenantId || resolveTenantId(actor);
   const now = new Date().toISOString();
   try {
     const batch = writeBatch(db);
@@ -1006,6 +1065,7 @@ export async function saveDailyAttendanceBatch(
         batch.set(
           doc(db, 'attendance', attId),
           cleanObject({
+            tenantId,
             enrollmentId: item.enrollment.id,
             studentId: item.enrollment.studentId,
             studentCode: item.enrollment.studentCode,
@@ -1028,6 +1088,7 @@ export async function saveDailyAttendanceBatch(
         batch.set(
           doc(db, 'notifications', `not_att_${item.enrollment.id}_${attendanceDate.replace(/-/g, '')}`),
           cleanObject({
+            tenantId,
             type: 'ATTENDANCE_UPDATE',
             title: `Attendance Recorded: ${item.status} (${course.name})`,
             message: `Your attendance on ${attendanceDate} (${ethDate} E.C.) for ${course.name} was marked ${item.status} by ${actor.fullName}.${item.remarks ? ` Note: ${item.remarks}` : ''}`,
@@ -1048,6 +1109,7 @@ export async function saveDailyAttendanceBatch(
     }
 
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
+      tenantId,
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
       actorRole: actor.role,
@@ -1081,6 +1143,8 @@ export async function saveStaffProfile(
   if (actor.role !== 'ADMIN') {
     throw new Error('Only administrators can manage staff roles.');
   }
+  assertTenantWritable(actor);
+  const tenantId = resolveTenantId(actor);
   const now = new Date().toISOString();
   const profileId = input.id || makeId('staff');
   const allowedModules =
@@ -1096,6 +1160,7 @@ export async function saveStaffProfile(
       doc(db, 'profiles', profileId),
       cleanObject({
         uid: profileId,
+        tenantId,
         email: input.email.trim().toLowerCase().slice(0, 160),
         fullName: input.fullName.trim().slice(0, 120),
         phone: input.phone?.trim().slice(0, 30),
@@ -1109,6 +1174,7 @@ export async function saveStaffProfile(
       })
     );
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
+      tenantId,
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
       actorRole: actor.role,

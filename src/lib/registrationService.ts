@@ -557,8 +557,18 @@ export async function allocateAtomicInstitutionalCode(
   existingCountHint: number,
   actor: ActorContext
 ): Promise<string> {
-  const counterDocId = kind === 'STUDENT' ? 'student_seq' : 'staff_seq';
-  const prefix = kind === 'STUDENT' ? 'ZAC-STU' : 'ZAC-STA';
+  const tenantId = actor.tenantId || 'zacma_default';
+  const counterDocId =
+    tenantId === 'zacma_default'
+      ? kind === 'STUDENT'
+        ? 'student_seq'
+        : 'staff_seq'
+      : `${tenantId}_${kind === 'STUDENT' ? 'student_seq' : 'staff_seq'}`;
+  const rawPrefix =
+    kind === 'STUDENT'
+      ? actor.studentIdPrefix || 'ZAC-STU'
+      : actor.staffIdPrefix || 'ZAC-STA';
+  const prefix = rawPrefix.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').replace(/-+$/, '') || (kind === 'STUDENT' ? 'ZAC-STU' : 'ZAC-STA');
   const counterRef = doc(db, 'id_counters', counterDocId);
   const now = new Date().toISOString();
 
@@ -569,6 +579,7 @@ export async function allocateAtomicInstitutionalCode(
         const cur = Number(snap.data().currentValue || 0);
         const next = cur + 1;
         tx.update(counterRef, {
+          tenantId,
           prefix,
           currentValue: next,
           updatedBy: actor.uid,
@@ -578,6 +589,7 @@ export async function allocateAtomicInstitutionalCode(
       } else {
         const start = Math.max(1, existingCountHint + 1);
         tx.set(counterRef, {
+          tenantId,
           prefix,
           currentValue: start,
           updatedBy: actor.uid,
@@ -626,6 +638,7 @@ export interface AiStudentRegistrationInput {
   ocrWarnings?: string[];
   ocrSummary?: string;
   allowDuplicateOverride?: boolean;
+  suppressIndividualNotification?: boolean;
 }
 
 export async function submitAiStudentRegistration(
@@ -633,6 +646,15 @@ export async function submitAiStudentRegistration(
   existingStudentsCount: number,
   actor: ActorContext
 ): Promise<{ studentId: string; studentCode: string; vaultId?: string }> {
+  if (actor.tenantStatus === 'SUSPENDED') {
+    throw new Error('This institute account is currently SUSPENDED. Contact ZACMA Platform Support.');
+  }
+  if (actor.studentLimit && actor.studentLimit > 0 && existingStudentsCount >= actor.studentLimit) {
+    throw new Error(
+      `Student limit (${actor.studentLimit}) reached for your current SaaS subscription plan. Please upgrade to register more students.`
+    );
+  }
+  const tenantId = actor.tenantId || 'zacma_default';
   const now = new Date().toISOString();
   const studentId = makeId('stu');
   const enrollmentId = makeId('enr');
@@ -712,6 +734,7 @@ export async function submitAiStudentRegistration(
     const batch = writeBatch(db);
 
     const studentDoc = cleanObject({
+      tenantId,
       studentCode,
       fullName: input.fullName.trim().slice(0, 120),
       gender: input.gender,
@@ -749,6 +772,7 @@ export async function submitAiStudentRegistration(
     batch.set(
       doc(db, 'identity_documents', vaultId),
       cleanObject({
+        tenantId,
         subjectType: 'STUDENT',
         subjectId: studentId,
         subjectCode: studentCode,
@@ -778,6 +802,7 @@ export async function submitAiStudentRegistration(
     // Claim hashed duplicate ID lock if not already locked
     if (!dup.isDuplicate) {
       batch.set(doc(db, 'id_number_locks', makeIdLockDocId(dup.idNumberHash)), {
+        tenantId,
         idNumberHash: dup.idNumberHash,
         documentType: input.idDocumentType,
         subjectType: 'STUDENT',
@@ -793,6 +818,7 @@ export async function submitAiStudentRegistration(
     batch.set(
       doc(db, 'enrollments', enrollmentId),
       cleanObject({
+        tenantId,
         studentId,
         studentCode,
         studentName: input.fullName.trim().slice(0, 120),
@@ -830,6 +856,7 @@ export async function submitAiStudentRegistration(
       allocated += amountDue;
       const dueDate = addDaysIso(input.enrollmentDate, (i - 1) * interval);
       batch.set(doc(db, 'payment_installments', makeId(`inst_${i}`)), {
+        tenantId,
         enrollmentId,
         studentId,
         studentCode,
@@ -853,6 +880,7 @@ export async function submitAiStudentRegistration(
       batch.set(
         doc(db, 'payments', paymentId),
         cleanObject({
+          tenantId,
           transactionRef: txRef,
           enrollmentId,
           studentId,
@@ -872,6 +900,7 @@ export async function submitAiStudentRegistration(
         })
       );
       batch.set(doc(db, 'payment_refs', sanitizeRefId(txRef)), {
+        tenantId,
         paymentId,
         transactionRef: txRef,
         recordedBy: actor.uid,
@@ -879,21 +908,25 @@ export async function submitAiStudentRegistration(
       });
     }
 
-    // Admin Notification
-    batch.set(doc(db, 'notifications', makeId('not')), {
-      type: 'PENDING_REGISTRATION',
-      title: `AI Student Registration: ${input.fullName.trim().slice(0, 55)}`,
-      message: `${studentCode} (${ID_DOCUMENT_LABELS[input.idDocumentType]} ${maskedId}) for ${input.course.name} submitted by ${actor.fullName}. Pending Admin verification & approval.`,
-      targetRole: 'ADMIN',
-      actionSection: 'registrations',
-      entityType: 'student',
-      entityId: studentId,
-      isRead: false,
-      createdAt: now,
-    });
+    // Admin Notification (suppressed during bulk batches so a single summary notification is emitted instead)
+    if (!input.suppressIndividualNotification) {
+      batch.set(doc(db, 'notifications', makeId('not')), {
+        tenantId,
+        type: 'PENDING_REGISTRATION',
+        title: `AI Student Registration: ${input.fullName.trim().slice(0, 55)}`,
+        message: `${studentCode} (${ID_DOCUMENT_LABELS[input.idDocumentType]} ${maskedId}) for ${input.course.name} submitted by ${actor.fullName}. Pending Admin verification & approval.`,
+        targetRole: 'ADMIN',
+        actionSection: 'registrations',
+        entityType: 'student',
+        entityId: studentId,
+        isRead: false,
+        createdAt: now,
+      });
+    }
 
     // Immutable Audit Log
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
+      tenantId,
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
       actorRole: actor.role,
@@ -948,6 +981,15 @@ export async function submitAiStaffRegistration(
   existingStaffCount: number,
   actor: ActorContext
 ): Promise<{ staffId: string; staffCode: string; vaultId: string }> {
+  if (actor.tenantStatus === 'SUSPENDED') {
+    throw new Error('This institute account is currently SUSPENDED. Contact ZACMA Platform Support.');
+  }
+  if (actor.staffLimit && actor.staffLimit > 0 && existingStaffCount >= actor.staffLimit) {
+    throw new Error(
+      `Staff capacity limit (${actor.staffLimit}) reached for your current SaaS subscription plan. Please upgrade to register more staff.`
+    );
+  }
+  const tenantId = actor.tenantId || 'zacma_default';
   const now = new Date().toISOString();
   const staffId = makeId('stf');
   const trimmedIdNumber = input.idDocumentNumber.trim();
@@ -1006,6 +1048,7 @@ export async function submitAiStaffRegistration(
     batch.set(
       doc(db, 'staff_records', staffId),
       cleanObject({
+        tenantId,
         staffCode,
         fullName: input.fullName.trim().slice(0, 120),
         address: input.address.trim().slice(0, 240),
@@ -1040,6 +1083,7 @@ export async function submitAiStaffRegistration(
       batch.set(
         doc(db, 'staff_compensation', staffId),
         cleanObject({
+          tenantId,
           staffId,
           staffCode,
           salaryEtb: Number(input.salaryEtb),
@@ -1057,6 +1101,7 @@ export async function submitAiStaffRegistration(
     batch.set(
       doc(db, 'identity_documents', vaultId),
       cleanObject({
+        tenantId,
         subjectType: 'STAFF',
         subjectId: staffId,
         subjectCode: staffCode,
@@ -1085,6 +1130,7 @@ export async function submitAiStaffRegistration(
 
     if (!dup.isDuplicate) {
       batch.set(doc(db, 'id_number_locks', makeIdLockDocId(dup.idNumberHash)), {
+        tenantId,
         idNumberHash: dup.idNumberHash,
         documentType: input.idDocumentType,
         subjectType: 'STAFF',
@@ -1097,6 +1143,7 @@ export async function submitAiStaffRegistration(
     }
 
     batch.set(doc(db, 'notifications', makeId('not')), {
+      tenantId,
       type: 'PENDING_STAFF_REGISTRATION',
       title: `Staff Registration Pending: ${input.fullName.trim().slice(0, 55)}`,
       message: `${staffCode} (${input.jobPosition} · ${input.department}) submitted by ${actor.fullName}. Pending Admin ID verification & approval.`,
@@ -1109,6 +1156,7 @@ export async function submitAiStaffRegistration(
     });
 
     batch.set(doc(db, 'audit_logs', makeId('aud')), {
+      tenantId,
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
       actorRole: actor.role,
@@ -1156,6 +1204,7 @@ export async function approveStaffRegistration(
       doc(db, 'profiles', linkedProfileUid),
       cleanObject({
         uid: linkedProfileUid,
+        tenantId: staff.tenantId || actor.tenantId || 'zacma_default',
         email: staff.email,
         fullName: staff.fullName,
         phone: staff.phone,

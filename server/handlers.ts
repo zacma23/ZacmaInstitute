@@ -231,6 +231,8 @@ export interface AiChatPayload {
   history?: Array<{ role: 'user' | 'assistant' | 'model'; text: string }>;
   role?: RoleCode;
   userName?: string;
+  tenantId?: string;
+  tenantName?: string;
   mode?: AiChatMode;
   context?: Record<string, unknown>;
 }
@@ -287,11 +289,14 @@ function prepareAiChat(
     };
   }
 
-  const { message, history, role, userName, mode, context } = payload || {};
+  const { message, history, role, userName, tenantId, tenantName, mode, context } = payload || {};
   const allowedRoles: RoleCode[] = [
     'ADMIN',
+    'MANAGER',
     'ACCOUNTANT',
     'INSTRUCTOR',
+    'RECEPTIONIST',
+    'HR_OFFICER',
     'GENERAL_STAFF',
     'STUDENT',
   ];
@@ -316,21 +321,34 @@ function prepareAiChat(
   }
 
   const knowledgeText = buildKnowledgeContextForRole(role);
+  const safeTenantName = String(tenantName || 'ZACMA Technology Training Institute').slice(0, 120);
+  const safeTenantId = String(tenantId || 'zacma_default').slice(0, 64);
 
   const rolePolicy: Record<RoleCode, string> = {
     ADMIN:
-      'User is an ADMIN. You may explain dashboard statistics, approved revenue, outstanding fees, overdue student reports, pending approvals, financial reports, and system procedures using ONLY the authorized context data.',
+      'User is an INSTITUTE ADMIN. You may explain dashboard statistics, approved revenue, outstanding fees, overdue student reports, pending approvals, financial reports, and system procedures using ONLY the authorized context data for this institute.',
+    MANAGER:
+      'User is an INSTITUTE MANAGER. You may explain operational statistics, course rosters, enrollment counts, and authorized financial summaries for this institute only.',
     ACCOUNTANT:
       'User is an ACCOUNTANT. You may explain student registration, payment recording, payment balances, printing approved receipts, and overdue fee lists. Remind the user that Accountants cannot approve their own transactions or alter course fees.',
     INSTRUCTOR:
       'User is an INSTRUCTOR. STRICT SECURITY RULE: NEVER discuss, disclose, or estimate any financial amounts, ETB fees, revenue, expenses, or payment data. Focus strictly on assigned classes, enrolled students, and attendance workflows.',
+    RECEPTIONIST:
+      'User is a RECEPTIONIST. Focus strictly on front-desk student registration, ID scanning intake, course inquiries, and student directory lookups. Never disclose institutional accounting totals or staff salaries.',
+    HR_OFFICER:
+      'User is an HR OFFICER. Focus strictly on staff registration, onboarding workflows, and departmental organization. Never disclose private student financial ledgers.',
     GENERAL_STAFF:
       'User is GENERAL STAFF. Focus strictly on authorized operational modules, student directory lookups (non-financial), course schedules, and institutional workflows. Never disclose financial totals or private payment data.',
     STUDENT:
-      'User is a STUDENT. STRICT SECURITY RULE: Only discuss THIS student’s own payment schedule, own outstanding ETB balance, own payment status, and how to print their own approved receipts. NEVER reference or speculate about any other student.',
+      'User is a STUDENT. STRICT SECURITY RULE: Only discuss THIS student’s own payment schedule, own outstanding fee balance, own payment status, and how to print their own approved receipts. NEVER reference or speculate about any other student.',
   };
 
-  const systemInstruction = `You are "ZACMA AI ASSISTANT", the official multi-turn help and analytics chatbot for ZACMA Technology & Training Institute's Student Fee Management & Accounting Portal.
+  const systemInstruction = `You are "AI PORTAL ASSISTANT", the official multi-turn help and analytics assistant for ${safeTenantName} (powered by ZACMA Multi-Tenant SaaS).
+
+TENANT ISOLATION BOUNDARY (ABSOLUTE):
+- Active Training Institute: ${safeTenantName} (Tenant ID: ${safeTenantId})
+- You MUST ONLY answer using records belonging to ${safeTenantName} provided in the Authorized Live Context below.
+- NEVER reference, compare, or reveal data belonging to any other training institute or tenant on the platform.
 
 AUTHENTICATED USER:
 - Name: ${String(userName || 'Authorized User').slice(0, 80)}
@@ -338,17 +356,17 @@ AUTHENTICATED USER:
 - Policy: ${rolePolicy[role]}
 
 ABSOLUTE SECURITY & ACCOUNTING RULES (NEVER VIOLATE):
-1. Currency is always Ethiopian Birr (ETB).
+1. Respect the institute's configured currency (default Ethiopian Birr / ETB).
 2. ONLY APPROVED payments count as official revenue or reduce student balances. Pending payments never count as paid.
 3. NEVER invent payment figures, receipt numbers, student IDs, or balances. If a specific figure is not in the Authorized Live Context below, clearly state that it is not available in your current view.
 4. NEVER claim to approve payments, modify accounting records, create users, or change permissions. You are strictly read-only; guide the authorized user on where to click and confirm manually.
-5. NEVER reveal passwords, API keys, service-role secrets, or private records belonging to another student.
-6. Maintain continuity across the multi-turn conversation. Keep responses concise, structured with clean bullet points when helpful, accurate, and directly actionable inside the ZACMA portal.
+5. NEVER reveal passwords, API keys, service-role secrets, or private records belonging to another student or another institute.
+6. Maintain continuity across the multi-turn conversation. Keep responses concise, structured with clean bullet points when helpful, accurate, and directly actionable inside the portal.
 
-OFFICIAL ZACMA SYSTEM KNOWLEDGE BASE:
+OFFICIAL SYSTEM KNOWLEDGE BASE:
 ${knowledgeText}
 
-AUTHORIZED LIVE CONTEXT FOR THIS ${role} SESSION (JSON):
+AUTHORIZED LIVE CONTEXT FOR THIS ${role} SESSION AT ${safeTenantName} (JSON):
 ${JSON.stringify(context || {}, null, 2).slice(0, 12000)}`;
 
   const primaryStandardModel = getAiModelName();

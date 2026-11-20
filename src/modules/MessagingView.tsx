@@ -36,8 +36,11 @@ import { Conversation, DirectoryUser, InternalMessage, RoleCode } from '../types
 
 const ROLE_LABELS: Record<RoleCode, string> = {
   ADMIN: 'Admin',
+  MANAGER: 'Manager',
   ACCOUNTANT: 'Accountant',
   INSTRUCTOR: 'Instructor',
+  RECEPTIONIST: 'Receptionist',
+  HR_OFFICER: 'HR Officer',
   GENERAL_STAFF: 'Staff',
   STUDENT: 'Student',
 };

@@ -1,4 +1,53 @@
-export type RoleCode = 'ADMIN' | 'ACCOUNTANT' | 'INSTRUCTOR' | 'GENERAL_STAFF' | 'STUDENT';
+export type PlatformRole =
+  | 'SUPER_ADMIN'
+  | 'PLATFORM_ADMIN'
+  | 'PLATFORM_SUPPORT'
+  | 'PLATFORM_FINANCE';
+
+export type RoleCode =
+  | 'ADMIN'
+  | 'MANAGER'
+  | 'ACCOUNTANT'
+  | 'INSTRUCTOR'
+  | 'RECEPTIONIST'
+  | 'HR_OFFICER'
+  | 'GENERAL_STAFF'
+  | 'STUDENT';
+
+export type SaasModuleCode =
+  | 'STUDENT_MANAGEMENT'
+  | 'STAFF_MANAGEMENT'
+  | 'COURSE_MANAGEMENT'
+  | 'FEE_MANAGEMENT'
+  | 'ACCOUNTING'
+  | 'ATTENDANCE'
+  | 'AI_ASSISTANT'
+  | 'AI_ID_SCANNING'
+  | 'NOTIFICATIONS'
+  | 'REPORTS'
+  | 'HR_MANAGEMENT'
+  | 'INVENTORY'
+  | 'CERTIFICATES';
+
+export type SuperAdminNavSection =
+  | 'sa_dashboard'
+  | 'sa_add_institute'
+  | 'sa_institutes'
+  | 'sa_subscriptions'
+  | 'sa_plans'
+  | 'sa_revenue'
+  | 'sa_platform_users'
+  | 'sa_modules'
+  | 'sa_global_settings'
+  | 'sa_notifications'
+  | 'sa_ai_services'
+  | 'sa_analytics'
+  | 'sa_audit_logs'
+  | 'sa_security'
+  | 'sa_support';
+
+export type TenantStatus = 'ACTIVE' | 'TRIAL' | 'SUSPENDED' | 'PENDING' | 'EXPIRED';
+export type BillingCycle = 'MONTHLY' | 'ANNUAL' | 'TRIAL' | 'CUSTOM';
 
 export type PaymentPlanCode =
   | 'FULL'
@@ -41,7 +90,10 @@ export type NotificationType =
   | 'CHAPA_PAYMENT_LINK'
   | 'CHAPA_PAYMENT_VERIFIED'
   | 'CHAPA_PAYMENT_APPROVED'
-  | 'CHAPA_PAYMENT_REJECTED';
+  | 'CHAPA_PAYMENT_REJECTED'
+  | 'SUBSCRIPTION_EXPIRING'
+  | 'INSTITUTE_PROVISIONED'
+  | 'SUPPORT_SESSION_STARTED';
 
 export type NavSection =
   | 'dashboard'
@@ -59,6 +111,7 @@ export type NavSection =
   | 'messages'
   | 'communications'
   | 'staff'
+  | 'branding'
   | 'audit'
   | 'setup';
 
@@ -94,6 +147,9 @@ export interface RoleRecord {
 export interface StaffProfile {
   id: string;
   uid: string;
+  tenantId?: string;
+  platformRole?: PlatformRole;
+  inviteId?: string;
   email: string;
   fullName: string;
   phone?: string;
@@ -109,6 +165,7 @@ export interface StaffProfile {
 
 export interface FinancialAdjustment {
   id: string;
+  tenantId?: string;
   adjustmentRef: string;
   enrollmentId: string;
   studentId: string;
@@ -128,6 +185,7 @@ export interface FinancialAdjustment {
 
 export interface SecurityConfig {
   id: string;
+  tenantId?: string;
   adminTimeoutMinutes: number;
   userTimeoutMinutes: number;
   warningBeforeSeconds: number;
@@ -141,6 +199,7 @@ export interface SecurityConfig {
 
 export interface LoginHistoryRecord {
   id: string;
+  tenantId?: string;
   userId: string;
   email: string;
   fullName: string;
@@ -155,6 +214,7 @@ export interface LoginHistoryRecord {
 
 export interface Course {
   id: string;
+  tenantId?: string;
   code: string;
   name: string;
   category: string;
@@ -171,6 +231,7 @@ export interface Course {
 
 export interface PaymentPlan {
   id: string;
+  tenantId?: string;
   code: PaymentPlanCode;
   name: string;
   installmentCount: number;
@@ -181,6 +242,7 @@ export interface PaymentPlan {
 
 export interface Student {
   id: string;
+  tenantId?: string;
   studentCode: string;
   fullName: string;
   gender: 'Male' | 'Female' | 'Unspecified';
@@ -219,6 +281,7 @@ export interface Student {
 
 export interface StaffRecord {
   id: string;
+  tenantId?: string;
   staffCode: string;
   fullName: string;
   address: string;
@@ -254,6 +317,7 @@ export interface StaffRecord {
 
 export interface StaffCompensation {
   id: string;
+  tenantId?: string;
   staffId: string;
   staffCode: string;
   salaryEtb: number;
@@ -267,6 +331,7 @@ export interface StaffCompensation {
 
 export interface IdentityDocumentRecord {
   id: string;
+  tenantId?: string;
   subjectType: 'STUDENT' | 'STAFF';
   subjectId: string;
   subjectCode: string;
@@ -306,6 +371,7 @@ export interface DecryptedIdVaultPayload {
 
 export interface Enrollment {
   id: string;
+  tenantId?: string;
   studentId: string;
   studentCode: string;
   studentName: string;
@@ -327,6 +393,7 @@ export interface Enrollment {
 
 export interface PaymentInstallment {
   id: string;
+  tenantId?: string;
   enrollmentId: string;
   studentId: string;
   studentCode: string;
@@ -344,6 +411,7 @@ export interface PaymentInstallment {
 
 export interface Payment {
   id: string;
+  tenantId?: string;
   transactionRef: string;
   enrollmentId: string;
   studentId: string;
@@ -382,6 +450,7 @@ export type ChapaTransactionSource = 'STUDENT_PORTAL' | 'PAYMENT_LINK';
 
 export interface ChapaTransaction {
   id: string;
+  tenantId?: string;
   txRef: string;
   studentId: string;
   studentCode: string;
@@ -392,7 +461,7 @@ export interface ChapaTransaction {
   courseName: string;
   enrollmentId: string;
   amountEtb: number;
-  currency: 'ETB';
+  currency: 'ETB' | 'USD' | 'KES' | 'EUR' | 'GBP';
   paymentMethod: 'Chapa';
   source: ChapaTransactionSource;
   checkoutUrl?: string;
@@ -423,6 +492,7 @@ export interface ChapaTransaction {
 
 export interface Receipt {
   id: string;
+  tenantId?: string;
   receiptNumber: string;
   paymentId: string;
   transactionRef: string;
@@ -443,6 +513,7 @@ export interface Receipt {
 
 export interface ExpenseCategory {
   id: string;
+  tenantId?: string;
   name: string;
   description?: string;
   isActive: boolean;
@@ -450,6 +521,7 @@ export interface ExpenseCategory {
 
 export interface Expense {
   id: string;
+  tenantId?: string;
   categoryId: string;
   categoryName: string;
   title: string;
@@ -465,6 +537,7 @@ export interface Expense {
 
 export interface AttendanceRecord {
   id: string;
+  tenantId?: string;
   enrollmentId: string;
   studentId: string;
   studentCode: string;
@@ -482,6 +555,7 @@ export interface AttendanceRecord {
 
 export interface PortalNotification {
   id: string;
+  tenantId?: string;
   type: NotificationType;
   title: string;
   message: string;
@@ -529,13 +603,16 @@ export interface SchemaMigration {
 
 export interface AuditLog {
   id: string;
+  tenantId?: string;
   actorId: string;
   actorName: string;
   actorRole: RoleCode;
+  actorPlatformRole?: PlatformRole;
   action: string;
   entityType: string;
   entityId: string;
   summary: string;
+  result?: 'SUCCESS' | 'DENIED' | 'FAILED';
   createdAt: string;
 }
 
@@ -603,6 +680,7 @@ export interface SmsTemplate {
 
 export interface SmsLog {
   id: string;
+  tenantId?: string;
   dedupKey?: string;
   eventType: CommunicationEventType;
   recipientName: string;
@@ -626,6 +704,7 @@ export interface SmsLog {
 
 export interface NotificationChannelRule {
   id: string;
+  tenantId?: string;
   eventType: CommunicationEventType;
   label: string;
   description: string;
@@ -637,6 +716,7 @@ export interface NotificationChannelRule {
 
 export interface DirectoryUser {
   id: string;
+  tenantId?: string;
   uid: string;
   fullName: string;
   role: RoleCode;
@@ -662,6 +742,7 @@ export type BroadcastAudience =
 
 export interface Conversation {
   id: string;
+  tenantId?: string;
   type: ConversationType;
   title: string;
   description?: string;
@@ -698,6 +779,232 @@ export interface InternalMessage {
   attachmentDataUrl?: string;
   readByUids: string[];
   createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// ZACMA Multi-Tenant SaaS Platform Models (Super Admin Control Center)
+// ---------------------------------------------------------------------------
+
+export interface TenantRecord {
+  id: string;
+  tenantId: string;
+  name: string;
+  shortName: string;
+  slug: string;
+  businessType: string;
+  email: string;
+  phone: string;
+  country: string;
+  city: string;
+  address: string;
+  website?: string;
+  logoUrl?: string;
+  primaryColor: string;
+  secondaryColor: string;
+  studentIdPrefix: string; // e.g., ZAC, ABC
+  staffIdPrefix: string;   // e.g., ZAC, ABC
+  receiptPrefix: string;   // e.g., ZAC-RCP, ABC-RCP
+  currency: 'ETB' | 'USD' | 'KES' | 'EUR' | 'GBP';
+  timezone: string;
+  academicYear: string;
+  paymentMethods: PaymentMethod[];
+  defaultLanguage: string;
+  dateFormat: 'GREGORIAN_AND_ETHIOPIAN' | 'GREGORIAN_ONLY' | 'DD/MM/YYYY' | 'YYYY-MM-DD';
+  invoiceFooterNote?: string;
+  notificationEmailEnabled: boolean;
+  notificationSmsEnabled: boolean;
+  notificationWhatsappEnabled: boolean;
+  emailGatewayStatus: 'CONFIGURED' | 'UNCONFIGURED';
+  smsGatewayStatus: 'CONFIGURED' | 'UNCONFIGURED';
+  whatsappGatewayStatus: 'CONFIGURED' | 'UNCONFIGURED';
+  smsSenderLabel?: string;
+  status: TenantStatus;
+  planId: string;
+  planCode: string;
+  planName: string;
+  billingCycle: BillingCycle;
+  monthlyPriceEtb: number;
+  annualPriceEtb: number;
+  studentLimit: number;
+  staffLimit: number;
+  storageLimitMb: number;
+  storageUsedMb: number;
+  aiMonthlyQuota: number;
+  aiRequestsUsed: number;
+  enabledModules: SaasModuleCode[];
+  primaryAdminUid?: string;
+  primaryAdminName: string;
+  primaryAdminEmail: string;
+  primaryAdminPhone: string;
+  primaryAdminPosition: string;
+  subscriptionStartDate: string;
+  trialEndsAt?: string;
+  subscriptionExpiresAt: string;
+  suspendedReason?: string;
+  suspendedAt?: string;
+  isDefaultPlatformTenant?: boolean;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SubscriptionPlan {
+  id: string;
+  code: 'FREE_TRIAL' | 'BASIC' | 'PROFESSIONAL' | 'ENTERPRISE' | 'CUSTOM';
+  name: string;
+  tagline: string;
+  monthlyPriceEtb: number;
+  annualPriceEtb: number;
+  trialDays: number;
+  studentLimit: number;
+  staffLimit: number;
+  storageLimitMb: number;
+  aiMonthlyQuota: number;
+  includedModules: SaasModuleCode[];
+  isActive: boolean;
+  isFeatured?: boolean;
+  updatedAt: string;
+}
+
+export interface PlatformSubscription {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  planId: string;
+  planCode: string;
+  planName: string;
+  billingCycle: BillingCycle;
+  priceEtb: number;
+  currency: 'ETB' | 'USD' | 'KES' | 'EUR' | 'GBP';
+  status: 'ACTIVE' | 'TRIAL' | 'OVERDUE' | 'EXPIRED' | 'CANCELLED' | 'SUSPENDED';
+  startDate: string;
+  trialEndsAt?: string;
+  expiresAt: string;
+  autoRenew: boolean;
+  lastReminderSentAt?: string;
+  notes?: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlatformInvoice {
+  id: string;
+  invoiceNumber: string;
+  tenantId: string;
+  tenantName: string;
+  subscriptionId: string;
+  planName: string;
+  billingCycle: BillingCycle;
+  amountEtb: number;
+  currency: 'ETB' | 'USD' | 'KES' | 'EUR' | 'GBP';
+  dueDate: string;
+  status: 'PENDING' | 'PAID' | 'OVERDUE' | 'VOID';
+  paidAt?: string;
+  paymentRef?: string;
+  notes?: string;
+  issuedBy: string;
+  issuedByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlatformPayment {
+  id: string;
+  paymentRef: string;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  tenantId: string;
+  tenantName: string;
+  planName: string;
+  amountEtb: number;
+  currency: 'ETB' | 'USD' | 'KES' | 'EUR' | 'GBP';
+  paymentDate: string;
+  paymentMethod: 'Bank Transfer' | 'Chapa' | 'Telebirr' | 'CBE Birr' | 'Cash' | 'Check';
+  status: 'COMPLETED' | 'REFUNDED';
+  recordedBy: string;
+  recordedByName: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface TenantInvitation {
+  id: string;
+  token: string;
+  tenantId: string;
+  tenantName: string;
+  email: string;
+  emailLower: string;
+  fullName: string;
+  phone?: string;
+  position?: string;
+  role: RoleCode;
+  status: 'PENDING' | 'CLAIMED' | 'REVOKED' | 'EXPIRED';
+  expiresAt: string;
+  claimedByUid?: string;
+  claimedAt?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SupportAccessSession {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  actorUid: string;
+  actorName: string;
+  actorPlatformRole: PlatformRole;
+  reason: string;
+  status: 'ACTIVE' | 'ENDED' | 'EXPIRED';
+  startedAt: string;
+  expiresAt: string;
+  endedAt?: string;
+}
+
+export interface PlatformGlobalSettings {
+  id: string;
+  platformName: string;
+  supportEmail: string;
+  supportPhone: string;
+  defaultCurrency: 'ETB' | 'USD' | 'KES' | 'EUR' | 'GBP';
+  defaultLanguage: string;
+  defaultTrialDays: number;
+  gracePeriodDays: number;
+  autoSuspendExpiredDays: number;
+  allowSelfSignupInstitutes: boolean;
+  enforceSupportSessionReason: boolean;
+  maxSupportSessionMinutes: number;
+  updatedBy?: string;
+  updatedByName?: string;
+  updatedAt: string;
+}
+
+export interface SupportTicket {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  subject: string;
+  category: 'BILLING' | 'TECHNICAL' | 'ONBOARDING' | 'SECURITY' | 'MODULE_UPGRADE';
+  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
+  description: string;
+  createdBy: string;
+  createdByName: string;
+  assignedToName?: string;
+  resolutionNotes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function formatCurrency(amount: number, currency: string = 'ETB'): string {
+  const safe = Number.isFinite(amount) ? amount : 0;
+  return `${currency} ${safe.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 export function formatEtb(amount: number): string {

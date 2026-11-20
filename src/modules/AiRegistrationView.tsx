@@ -33,6 +33,7 @@ import {
   IdDocumentScanner,
 } from '../components/IdDocumentScanner';
 import { QrIdScannerModal, ZacmaQrBadgeModal } from '../components/QrIdScannerModal';
+import { BulkStudentImportPanel } from '../components/BulkStudentImportPanel';
 import { matchCourseFromHint, ParsedQrIdentity } from '../lib/qrIdParser';
 import { DualCalendarDatePicker, DualDateDisplay } from '../components/DualCalendarDatePicker';
 import { Avatar, ConfirmDialog, EmptyState, StatusLabel } from '../components/PortalUI';
@@ -76,6 +77,7 @@ import {
 
 type SubTab =
   | 'register'
+  | 'bulk_import'
   | 'students'
   | 'staff'
   | 'pending'
@@ -108,6 +110,7 @@ export function AiRegistrationView() {
   const {
     profile,
     effectiveRole,
+    actorContext,
     students,
     enrollments,
     courses,
@@ -457,7 +460,7 @@ export function AiRegistrationView() {
       return;
     }
 
-    const actor = {
+    const actor = actorContext || {
       uid: profile.uid,
       fullName: profile.fullName,
       role: profile.role,
@@ -660,7 +663,7 @@ export function AiRegistrationView() {
   const handleConfirmDecision = async (reason?: string) => {
     if (!confirmDecision || !profile) return;
     setDecisionBusy(true);
-    const actor = {
+    const actor = actorContext || {
       uid: profile.uid,
       fullName: profile.fullName,
       role: profile.role,
@@ -725,6 +728,7 @@ export function AiRegistrationView() {
 
   const tabs: Array<{ id: SubTab; label: string; count?: number; adminOnly?: boolean }> = [
     { id: 'register', label: 'AI Scan & Register' },
+    { id: 'bulk_import', label: 'Bulk Excel Import' },
     { id: 'students', label: 'Student Registrations', count: students.length },
     { id: 'staff', label: 'Staff Registrations', count: staffRecords.length },
     { id: 'pending', label: 'Pending Approvals', count: totalPendingCount },
@@ -776,6 +780,14 @@ export function AiRegistrationView() {
               Export Registrations (.xlsx)
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => setSubTab('bulk_import')}
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors"
+          >
+            <Upload className="w-4 h-4" />
+            Bulk Excel Import
+          </button>
           <button
             type="button"
             onClick={() => setQrScannerOpen(true)}
@@ -876,7 +888,7 @@ export function AiRegistrationView() {
           })}
         </div>
 
-        {subTab !== 'register' && (
+        {subTab !== 'register' && subTab !== 'bulk_import' && (
           <div className="relative min-w-[230px] flex-1 max-w-xs">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
@@ -889,6 +901,13 @@ export function AiRegistrationView() {
           </div>
         )}
       </div>
+
+      {/* ================================================================= */}
+      {/* TAB 1B: BULK STUDENT EXCEL REGISTRATION IMPORT                    */}
+      {/* ================================================================= */}
+      {subTab === 'bulk_import' && (
+        <BulkStudentImportPanel onOpenPendingApprovals={() => setSubTab('pending')} />
+      )}
 
       {/* ================================================================= */}
       {/* TAB 1: AI SCAN & REGISTER (STUDENT OR STAFF)                      */}

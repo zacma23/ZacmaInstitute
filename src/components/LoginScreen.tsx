@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   BookOpen,
   Briefcase,
+  Building2,
   Calculator,
   Check,
   CheckSquare,
@@ -47,6 +48,28 @@ export function LoginScreen() {
   const [localError, setLocalError] = useState<string | null>(null);
   const [resetSent, setResetSent] = useState(false);
   const [copiedHost, setCopiedHost] = useState(false);
+  const [inviteInfo, setInviteInfo] = useState<{
+    token: string;
+    email: string;
+    tenantName: string;
+  } | null>(null);
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('invite')?.trim() || '';
+      const invEmail = params.get('email')?.trim() || '';
+      const tenantName = params.get('tenant')?.trim() || '';
+      if (token && invEmail) {
+        setInviteInfo({ token, email: invEmail, tenantName: tenantName || 'Your Training Institute' });
+        setPortalTab('STAFF');
+        setAuthMode('SIGN_UP');
+        setEmail(invEmail);
+      }
+    } catch {
+      // Ignore malformed search params
+    }
+  }, []);
 
   const isUnauthorizedDomain = Boolean(authError?.startsWith('UNAUTHORIZED_DOMAIN|'));
   const [, unauthorizedHost = '', unauthorizedProjectId = ''] = isUnauthorizedDomain
@@ -275,6 +298,21 @@ export function LoginScreen() {
               >
                 Create Account
               </button>
+            </div>
+          )}
+
+          {/* Institute Administrator Onboarding Invitation Banner */}
+          {inviteInfo && (
+            <div className="mb-5 p-4 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-950 space-y-1.5">
+              <div className="flex items-center gap-2 font-bold text-blue-900">
+                <Building2 className="w-4 h-4 text-blue-700 shrink-0" />
+                <span>Institute Portal Invitation — {inviteInfo.tenantName}</span>
+              </div>
+              <p className="text-[11px] text-blue-900/90 leading-relaxed">
+                You have been invited by ZACMA Platform Operations to activate your account for{' '}
+                <strong>{inviteInfo.tenantName}</strong>. Create a password below or sign in with Google using{' '}
+                <strong className="font-mono">{inviteInfo.email}</strong> to claim your assigned role automatically.
+              </p>
             </div>
           )}
 

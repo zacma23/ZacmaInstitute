@@ -1,8 +1,10 @@
 import React from 'react';
 import { Printer, ShieldCheck, X } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { formatEtb, Receipt } from '../types/zacma';
+import { formatCurrency, Receipt } from '../types/zacma';
 import { formatDualDate } from '../lib/ethiopianCalendar';
+import { usePortal } from '../context/PortalContext';
+import { DEFAULT_ZACMA_TENANT_ID } from '../lib/saasService';
 import { ZacmaLogo } from './ZacmaLogo';
 
 export function ReceiptModal({
@@ -12,18 +14,33 @@ export function ReceiptModal({
   receipt: Receipt | null;
   onClose: () => void;
 }) {
+  const { activeTenant, activeTenantId } = usePortal();
   if (!receipt) return null;
+
+  const isCustomTenant = activeTenantId !== DEFAULT_ZACMA_TENANT_ID;
+  const orgName = activeTenant?.name || 'ZACMA Technology & Training Institute';
+  const orgAddress = activeTenant
+    ? `${activeTenant.address}${activeTenant.city ? ` · ${activeTenant.city}` : ''}${activeTenant.country ? `, ${activeTenant.country}` : ''}`
+    : 'Office of the Registrar & Student Accounts · Addis Ababa, Ethiopia';
+  const orgContact = activeTenant
+    ? [activeTenant.phone, activeTenant.email].filter(Boolean).join(' · ')
+    : '';
+  const currency = activeTenant?.currency || 'ETB';
+  const footerNote =
+    activeTenant?.invoiceFooterNote ||
+    `Scan QR code to verify official receipt authenticity against ${orgName} accounting ledger.`;
 
   const issuedDual = formatDualDate(receipt.issuedAt, false);
   const paymentDual = formatDualDate(receipt.paymentDate, false);
 
   const qrPayload = JSON.stringify({
-    org: 'ZACMA Technology & Training Institute',
+    org: orgName,
+    tid: activeTenantId,
     rcp: receipt.receiptNumber,
     ref: receipt.transactionRef,
     sid: receipt.studentCode,
     amt: receipt.amountPaidEtb,
-    cur: 'ETB',
+    cur: currency,
     hash: receipt.verificationHash,
   });
 
@@ -62,18 +79,40 @@ export function ReceiptModal({
           <div className="flex items-start justify-between gap-6 pb-5">
             <div>
               <div className="flex items-center gap-3 mb-2">
-                <ZacmaLogo variant="mark" size="lg" framed />
+                {!isCustomTenant && !activeTenant?.logoUrl ? (
+                  <ZacmaLogo variant="mark" size="lg" framed />
+                ) : activeTenant?.logoUrl ? (
+                  <img
+                    src={activeTenant.logoUrl}
+                    alt={orgName}
+                    className="w-12 h-12 rounded-lg object-contain border border-slate-200 p-1 bg-white shrink-0"
+                  />
+                ) : (
+                  <div
+                    className="w-12 h-12 rounded-lg flex items-center justify-center font-display font-extrabold text-sm text-white shrink-0"
+                    style={{ backgroundColor: activeTenant?.primaryColor || '#0B2545' }}
+                  >
+                    {orgName.slice(0, 2).toUpperCase()}
+                  </div>
+                )}
                 <div>
-                  <h1 className="text-base sm:text-lg font-extrabold text-slate-900 tracking-tight leading-tight">
-                    ZACMA <span className="text-blue-700">TECHNOLOGY</span> &amp; TRAINING INSTITUTE
+                  <h1 className="text-base sm:text-lg font-extrabold text-slate-900 tracking-tight leading-tight uppercase">
+                    {!isCustomTenant ? (
+                      <>
+                        ZACMA <span className="text-blue-700">TECHNOLOGY</span> &amp; TRAINING INSTITUTE
+                      </>
+                    ) : (
+                      orgName
+                    )}
                   </h1>
-                  <p className="text-xs text-slate-500">
-                    Office of the Registrar &amp; Student Accounts · Addis Ababa, Ethiopia
-                  </p>
+                  <p className="text-xs text-slate-500">{orgAddress}</p>
+                  {orgContact && (
+                    <p className="text-[11px] text-slate-500 mt-0.5">{orgContact}</p>
+                  )}
                 </div>
               </div>
               <p className="text-xs text-slate-500 mt-1">
-                Official Tuition &amp; Training Fee Receipt · Currency: Ethiopian Birr (ETB)
+                Official Tuition &amp; Training Fee Receipt · Currency: {currency}
               </p>
             </div>
             <div className="text-right shrink-0">
@@ -91,7 +130,16 @@ export function ReceiptModal({
               </p>
             </div>
           </div>
-          <div className="h-1 w-full zacma-brand-stripe rounded-full mb-1" />
+          {isCustomTenant ? (
+            <div
+              className="h-1 w-full rounded-full mb-1"
+              style={{
+                background: `linear-gradient(90deg, ${activeTenant?.primaryColor || '#0B2545'}, ${activeTenant?.secondaryColor || '#D97706'})`,
+              }}
+            />
+          ) : (
+            <div className="h-1 w-full zacma-brand-stripe rounded-full mb-1" />
+          )}
 
           {/* Student & Payment Metadata Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 py-6 border-b border-slate-200 text-sm">
@@ -142,14 +190,14 @@ export function ReceiptModal({
               <thead>
                 <tr className="border-b border-slate-200 text-xs text-slate-500">
                   <th className="text-left font-semibold pb-2.5">Description</th>
-                  <th className="text-right font-semibold pb-2.5">Amount (ETB)</th>
+                  <th className="text-right font-semibold pb-2.5">Amount ({currency})</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 <tr>
                   <td className="py-3 text-slate-600">Previous Outstanding Balance</td>
                   <td className="py-3 text-right font-mono tabular-nums text-slate-700">
-                    {formatEtb(receipt.previousBalanceEtb)}
+                    {formatCurrency(receipt.previousBalanceEtb, currency)}
                   </td>
                 </tr>
                 <tr>
@@ -157,7 +205,7 @@ export function ReceiptModal({
                     Tuition Fee Payment Received ({receipt.courseName})
                   </td>
                   <td className="py-3 text-right font-mono tabular-nums font-bold text-blue-700">
-                    {formatEtb(receipt.amountPaidEtb)}
+                    {formatCurrency(receipt.amountPaidEtb, currency)}
                   </td>
                 </tr>
                 <tr className="bg-slate-50">
@@ -165,7 +213,7 @@ export function ReceiptModal({
                     Remaining Balance After Payment
                   </td>
                   <td className="py-3 px-3 text-right font-mono tabular-nums font-bold text-slate-900">
-                    {formatEtb(receipt.remainingBalanceEtb)}
+                    {formatCurrency(receipt.remainingBalanceEtb, currency)}
                   </td>
                 </tr>
               </tbody>
@@ -181,8 +229,8 @@ export function ReceiptModal({
               <div className="space-y-1">
                 <p className="text-xs font-semibold text-slate-900">Digital Verification Code</p>
                 <p className="text-xs font-mono text-slate-600">{receipt.verificationHash}</p>
-                <p className="text-[11px] text-slate-500 max-w-[220px] leading-snug">
-                  Scan QR code to verify official receipt authenticity against ZACMA accounting ledger.
+                <p className="text-[11px] text-slate-500 max-w-[240px] leading-snug">
+                  {footerNote}
                 </p>
               </div>
             </div>
@@ -195,7 +243,7 @@ export function ReceiptModal({
               </div>
               <p className="text-xs font-semibold text-slate-700">Authorized Signature</p>
               <p className="text-[11px] text-slate-500">
-                Finance Controller · ZACMA Technology &amp; Training Institute
+                Finance Controller · {orgName}
               </p>
             </div>
           </div>
