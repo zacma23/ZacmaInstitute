@@ -6,7 +6,8 @@
   "outputDirectory": "dist",
   "functions": {
     "api/**/*.ts": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "includeFiles": "{firebase-applet-config.json,supabase/migrations/**}"
     }
   },
   "crons": [
@@ -16,6 +17,15 @@
     }
   ],
   "headers": [
+    {
+      "source": "/api/ai/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, no-cache, must-revalidate, private"
+        }
+      ]
+    },
     {
       "source": "/api/session/(.*)",
       "headers": [
@@ -45,6 +55,10 @@
     }
   ],
   "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index?__route=$1"
+    },
     {
       "source": "/__/auth/:path*",
       "destination": "https://gen-lang-client-0608981624.firebaseapp.com/__/auth/:path*"

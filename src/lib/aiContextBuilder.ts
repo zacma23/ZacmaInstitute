@@ -494,7 +494,7 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
       myStudentProfile: me
         ? {
             id: me.id,
-            studentId: me.studentId,
+            studentCode: me.studentCode,
             fullName: me.fullName,
             registrationStatus: me.registrationStatus,
           }
@@ -502,26 +502,25 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
       myEnrollments: myEnrollments.map((e) => ({
         studentId: e.studentId,
         courseName: e.courseName,
-        totalFeeEtb: e.totalFeeEtb,
-        amountPaidEtb: e.amountPaidEtb,
-        pendingAmountEtb: e.pendingAmountEtb,
+        agreedFeeEtb: e.agreedFeeEtb,
+        approvedPaidEtb: e.approvedPaidEtb,
         remainingBalanceEtb: e.remainingBalanceEtb,
         status: e.status,
       })),
       myInstallments: myInstallments.slice(0, 20).map((i) => ({
         studentId: i.studentId,
         courseName: i.courseName,
-        label: i.label,
+        label: `Installment #${i.installmentNumber}`,
         dueDate: i.dueDate,
-        amountEtb: i.amountEtb,
-        paidAmountEtb: i.paidAmountEtb,
+        amountDueEtb: i.amountDueEtb,
+        amountPaidEtb: i.amountPaidEtb,
         status: i.status,
       })),
       myPayments: myPayments.slice(0, 20).map((p) => ({
         studentId: p.studentId,
         courseName: p.courseName,
         amountEtb: p.amountEtb,
-        method: p.method,
+        paymentMethod: p.paymentMethod,
         status: p.status,
         paymentDate: p.paymentDate,
         receiptNumber: p.receiptNumber,
@@ -529,14 +528,14 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
       myReceipts: myReceipts.slice(0, 15).map((r) => ({
         studentId: r.studentId,
         receiptNumber: r.receiptNumber,
-        amountEtb: r.amountEtb,
+        amountPaidEtb: r.amountPaidEtb,
         courseName: r.courseName,
-        approvedAt: r.approvedAt,
+        issuedAt: r.issuedAt,
       })),
       myAttendance: myAttendance.slice(0, 30).map((a) => ({
         studentId: a.studentId,
         courseName: a.courseName,
-        date: a.date,
+        attendanceDate: a.attendanceDate,
         status: a.status,
       })),
       ...fileBlock,
@@ -571,7 +570,7 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
         .filter((s) => classStudentIds.has(s.id))
         .slice(0, 40)
         .map((s) => ({
-          studentId: s.studentId,
+          studentCode: s.studentCode,
           fullName: s.fullName,
           status: s.registrationStatus,
         })),
@@ -599,10 +598,10 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
           code: c.code,
           name: c.name,
           durationWeeks: c.durationWeeks,
-          standardFeeEtb: c.standardFeeEtb,
+          feeEtb: c.feeEtb,
         })),
       studentDirectory: data.students.slice(0, 40).map((s) => ({
-        studentId: s.studentId,
+        studentCode: s.studentCode,
         fullName: s.fullName,
         phone: s.phone,
         registrationStatus: s.registrationStatus,
@@ -624,14 +623,14 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
       activeModule,
       instituteInfo,
       staffDirectorySummary: data.staffRecords.slice(0, 40).map((s) => ({
-        staffId: s.staffId,
+        staffCode: s.staffCode,
         fullName: s.fullName,
-        roleTitle: s.roleTitle,
+        jobPosition: s.jobPosition,
         department: s.department,
-        employmentType: s.employmentType,
-        approvalStatus: s.approvalStatus,
+        portalRole: s.portalRole,
+        registrationStatus: s.registrationStatus,
       })),
-      pendingStaffRegistrations: data.staffRecords.filter((s) => s.approvalStatus === 'PENDING').length,
+      pendingStaffRegistrations: data.staffRecords.filter((s) => s.registrationStatus === 'PENDING').length,
       departmentBreakdown: deptCounts,
       ...fileBlock,
     };
@@ -649,7 +648,7 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
         durationWeeks: c.durationWeeks,
       })),
       studentDirectory: data.students.slice(0, 30).map((s) => ({
-        studentId: s.studentId,
+        studentCode: s.studentCode,
         fullName: s.fullName,
         registrationStatus: s.registrationStatus,
       })),
@@ -682,7 +681,7 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
     studentName: i.studentName,
     courseName: i.courseName,
     dueDate: i.dueDate,
-    unpaidAmount: Math.max(0, i.amountEtb - i.paidAmountEtb),
+    unpaidAmount: Math.max(0, i.amountDueEtb - i.amountPaidEtb),
   }));
 
   const duplicatePaymentFlags = detectDuplicatePaymentFlags(data.payments);
@@ -690,7 +689,7 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
   const chapaSummary = {
     totalTransactions: data.chapaTransactions.length,
     pendingVerification: data.chapaTransactions.filter(
-      (t) => t.gatewayStatus === 'SUCCESS' && t.approvalStatus === 'PENDING_APPROVAL'
+      (t) => t.paymentStatus === 'VERIFIED' && t.approvalStatus === 'AWAITING_APPROVAL'
     ).length,
     approvedTotal: data.chapaTransactions
       .filter((t) => t.approvalStatus === 'APPROVED')
@@ -720,7 +719,7 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
         sample: pendingPayments.slice(0, 10).map((p) => ({
           studentName: p.studentName,
           amountEtb: p.amountEtb,
-          method: p.method,
+          paymentMethod: p.paymentMethod,
           paymentDate: p.paymentDate,
         })),
       },
@@ -728,7 +727,7 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
       duplicatePaymentFlags,
       coursesSummary: data.courses.map((c) => ({
         name: c.name,
-        standardFeeEtb: c.standardFeeEtb,
+        feeEtb: c.feeEtb,
         enrolledCount: data.enrollments.filter((e) => e.courseId === c.id).length,
       })),
       ...fileBlock,
@@ -746,7 +745,7 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
       approvedStudents: data.students.filter((s) => s.registrationStatus === 'APPROVED').length,
       pendingStudents: data.students.filter((s) => s.registrationStatus === 'PENDING').length,
       activeCourses: data.courses.filter((c) => c.isActive).length,
-      activeStaff: data.staffRecords.filter((s) => s.approvalStatus === 'APPROVED').length,
+      activeStaff: data.staffRecords.filter((s) => s.registrationStatus === 'APPROVED').length,
     },
     financialSummary: {
       currency,
@@ -763,14 +762,14 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
     pendingApprovals: {
       pendingStudents: data.students.filter((s) => s.registrationStatus === 'PENDING').length,
       pendingPayments: pendingPayments.length,
-      pendingStaff: data.staffRecords.filter((s) => s.approvalStatus === 'PENDING').length,
+      pendingStaff: data.staffRecords.filter((s) => s.registrationStatus === 'PENDING').length,
     },
     chapaSummary,
     duplicatePaymentFlags,
     coursesSummary: data.courses.map((c) => ({
       code: c.code,
       name: c.name,
-      standardFeeEtb: c.standardFeeEtb,
+      feeEtb: c.feeEtb,
       enrolledCount: data.enrollments.filter((e) => e.courseId === c.id).length,
     })),
     attendanceSummary: {
@@ -782,8 +781,8 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
     },
     staffDirectorySummary: {
       total: data.staffRecords.length,
-      approved: data.staffRecords.filter((s) => s.approvalStatus === 'APPROVED').length,
-      pending: data.staffRecords.filter((s) => s.approvalStatus === 'PENDING').length,
+      approved: data.staffRecords.filter((s) => s.registrationStatus === 'APPROVED').length,
+      pending: data.staffRecords.filter((s) => s.registrationStatus === 'PENDING').length,
     },
     ...fileBlock,
   };
@@ -792,7 +791,7 @@ export function buildAuthorizedAiContext(data: AiContextSourceData): Record<stri
     baseExecContext.staffCompensationSummary = {
       configuredStaffCount: data.staffCompensations.length,
       totalMonthlyBasePayroll: data.staffCompensations.reduce(
-        (s, c) => s + (c.baseSalaryAmount || 0),
+        (s, c) => s + (c.salaryEtb || 0),
         0
       ),
     };

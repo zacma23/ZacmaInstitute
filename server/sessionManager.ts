@@ -166,10 +166,19 @@ export interface SessionHandlerResult {
   setCookie?: string;
 }
 
-const VALID_ROLES: RoleCode[] = ['ADMIN', 'ACCOUNTANT', 'INSTRUCTOR', 'GENERAL_STAFF', 'STUDENT'];
+const VALID_ROLES: RoleCode[] = [
+  'ADMIN',
+  'MANAGER',
+  'ACCOUNTANT',
+  'INSTRUCTOR',
+  'RECEPTIONIST',
+  'HR_OFFICER',
+  'GENERAL_STAFF',
+  'STUDENT',
+];
 
 function resolveTimeoutMs(role: RoleCode, requestedMinutes?: number): number {
-  const defaultMins = role === 'ADMIN' || role === 'ACCOUNTANT' ? 10 : 15;
+  const defaultMins = role === 'ADMIN' || role === 'MANAGER' || role === 'ACCOUNTANT' ? 10 : 15;
   const mins =
     typeof requestedMinutes === 'number' && Number.isFinite(requestedMinutes)
       ? Math.max(1, Math.min(120, Math.round(requestedMinutes)))

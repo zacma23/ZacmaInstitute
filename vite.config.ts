@@ -2,9 +2,10 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { defineConfig, type ResolvedConfig } from 'vite';
 
-const rootDir = import.meta.dirname;
+const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(() => {
   let resolvedOutDir = path.resolve(rootDir, 'dist');
