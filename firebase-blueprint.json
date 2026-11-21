@@ -40,6 +40,8 @@
         "code": { "type": "string", "maxLength": 24, "pattern": "^[A-Z0-9\\-]+$" },
         "name": { "type": "string", "maxLength": 120 },
         "category": { "type": "string", "maxLength": 80 },
+        "departmentId": { "type": "string", "maxLength": 128 },
+        "departmentName": { "type": "string", "maxLength": 120 },
         "durationWeeks": { "type": "number" },
         "feeEtb": { "type": "number" },
         "schedule": { "type": "string", "maxLength": 120 },
@@ -950,6 +952,7 @@
         "gracePeriodDays": { "type": "number" },
         "autoSuspendExpiredDays": { "type": "number" },
         "allowSelfSignupInstitutes": { "type": "boolean" },
+        "autoApproveInstituteRegistrations": { "type": "boolean" },
         "enforceSupportSessionReason": { "type": "boolean" },
         "maxSupportSessionMinutes": { "type": "number" },
         "defaultAiModel": { "type": "string", "enum": ["gemini-4-hydrogen", "gemini-3.1-flash-lite"] },
@@ -1023,6 +1026,130 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["tenantId", "userId", "userName", "roleScope", "moduleScope", "featureType", "modelId", "promptTokens", "outputTokens", "totalTokens", "estimatedCostUsd", "status", "createdAt"]
+    },
+    "InstituteRegistrationRequest": {
+      "title": "InstituteRegistrationRequest",
+      "description": "Public training institute self-registration application awaiting Super Admin approval or auto-provisioning.",
+      "type": "object",
+      "properties": {
+        "instituteName": { "type": "string", "maxLength": 140 },
+        "shortName": { "type": "string", "maxLength": 40 },
+        "slug": { "type": "string", "maxLength": 80 },
+        "businessType": { "type": "string", "maxLength": 80 },
+        "email": { "type": "string", "maxLength": 160 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "country": { "type": "string", "maxLength": 80 },
+        "city": { "type": "string", "maxLength": 80 },
+        "address": { "type": "string", "maxLength": 240 },
+        "website": { "type": "string", "maxLength": 200 },
+        "logoUrl": { "type": "string", "maxLength": 90000 },
+        "primaryColor": { "type": "string", "maxLength": 20 },
+        "secondaryColor": { "type": "string", "maxLength": 20 },
+        "currency": { "type": "string", "enum": ["ETB", "USD", "KES", "EUR", "GBP"] },
+        "selectedPlanId": { "type": "string", "maxLength": 80 },
+        "selectedPlanCode": { "type": "string", "maxLength": 40 },
+        "selectedPlanName": { "type": "string", "maxLength": 80 },
+        "billingCycle": { "type": "string", "enum": ["MONTHLY", "QUARTERLY", "ANNUAL", "TRIAL", "CUSTOM"] },
+        "adminFullName": { "type": "string", "maxLength": 120 },
+        "adminEmail": { "type": "string", "maxLength": 160 },
+        "adminPhone": { "type": "string", "maxLength": 30 },
+        "adminPosition": { "type": "string", "maxLength": 80 },
+        "applicantUid": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
+        "provisionedTenantId": { "type": "string", "maxLength": 80 },
+        "rejectionReason": { "type": "string", "maxLength": 300 },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "reviewedByName": { "type": "string", "maxLength": 120 },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["instituteName", "shortName", "slug", "businessType", "email", "phone", "country", "city", "address", "primaryColor", "secondaryColor", "currency", "selectedPlanId", "selectedPlanCode", "selectedPlanName", "billingCycle", "adminFullName", "adminEmail", "adminPhone", "adminPosition", "applicantUid", "status", "createdAt", "updatedAt"]
+    },
+    "PlatformAnnouncement": {
+      "title": "PlatformAnnouncement",
+      "description": "Platform-wide announcement published by ZACMA Super Admin to training institutes.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 160 },
+        "message": { "type": "string", "maxLength": 800 },
+        "severity": { "type": "string", "enum": ["INFO", "WARNING", "SUCCESS", "CRITICAL"] },
+        "targetAudience": { "type": "string", "enum": ["ALL_INSTITUTES", "TRIAL_INSTITUTES", "ACTIVE_INSTITUTES", "SPECIFIC_TENANT"] },
+        "targetTenantId": { "type": "string", "maxLength": 80 },
+        "isActive": { "type": "boolean" },
+        "expiresAt": { "type": "string", "maxLength": 20 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdByName": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "message", "severity", "targetAudience", "isActive", "createdBy", "createdByName", "createdAt", "updatedAt"]
+    },
+    "Department": {
+      "title": "Department",
+      "description": "Tenant-isolated academic department within a training institute.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 80 },
+        "code": { "type": "string", "maxLength": 24 },
+        "name": { "type": "string", "maxLength": 120 },
+        "headName": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 400 },
+        "isActive": { "type": "boolean" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "code", "name", "isActive", "createdBy", "createdAt", "updatedAt"]
+    },
+    "ClassBatch": {
+      "title": "ClassBatch",
+      "description": "Tenant-isolated class cohort or training batch assigned to a course and instructor.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 80 },
+        "batchCode": { "type": "string", "maxLength": 32 },
+        "name": { "type": "string", "maxLength": 120 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "departmentId": { "type": "string", "maxLength": 128 },
+        "departmentName": { "type": "string", "maxLength": 120 },
+        "instructorId": { "type": "string", "maxLength": 128 },
+        "instructorName": { "type": "string", "maxLength": 120 },
+        "room": { "type": "string", "maxLength": 80 },
+        "schedule": { "type": "string", "maxLength": 140 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "endDate": { "type": "string", "maxLength": 20 },
+        "capacity": { "type": "number" },
+        "status": { "type": "string", "enum": ["UPCOMING", "ACTIVE", "COMPLETED", "ARCHIVED"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "batchCode", "name", "courseId", "courseName", "schedule", "startDate", "endDate", "capacity", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "InstituteDocument": {
+      "title": "InstituteDocument",
+      "description": "Tenant-isolated institutional document library item (syllabi, handbooks, policies, forms, templates).",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 80 },
+        "title": { "type": "string", "maxLength": 160 },
+        "category": { "type": "string", "enum": ["SYLLABUS", "POLICY", "HANDBOOK", "CERTIFICATE_TEMPLATE", "FEE_SCHEDULE", "FORM", "OTHER"] },
+        "description": { "type": "string", "maxLength": 400 },
+        "fileName": { "type": "string", "maxLength": 160 },
+        "fileMimeType": { "type": "string", "maxLength": 100 },
+        "fileSizeBytes": { "type": "number" },
+        "fileDataUrl": { "type": "string", "maxLength": 650000 },
+        "visibility": { "type": "string", "enum": ["ALL_STAFF", "ADMIN_ONLY", "STUDENTS_AND_STAFF"] },
+        "departmentName": { "type": "string", "maxLength": 120 },
+        "courseName": { "type": "string", "maxLength": 120 },
+        "uploadedBy": { "type": "string", "maxLength": 128 },
+        "uploadedByName": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "title", "category", "fileName", "fileMimeType", "fileSizeBytes", "fileDataUrl", "visibility", "uploadedBy", "uploadedByName", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -1070,6 +1197,11 @@
     "/platform_settings/{settingId}": { "schema": { "$ref": "#/entities/PlatformGlobalSettings" }, "description": "Global ZACMA SaaS platform defaults and governance settings." },
     "/support_tickets/{ticketId}": { "schema": { "$ref": "#/entities/SupportTicket" }, "description": "Institute support & assistance tickets tracked by ZACMA Platform Support." },
     "/ai_conversations/{convId}": { "schema": { "$ref": "#/entities/AiConversation" }, "description": "Strictly private per-user AI conversation history isolated by ownerUid and tenantId." },
-    "/ai_usage_logs/{logId}": { "schema": { "$ref": "#/entities/AiUsageLog" }, "description": "Immutable AI request, token, and cost telemetry logs scoped by tenantId and userId." }
+    "/ai_usage_logs/{logId}": { "schema": { "$ref": "#/entities/AiUsageLog" }, "description": "Immutable AI request, token, and cost telemetry logs scoped by tenantId and userId." },
+    "/institute_registration_requests/{reqId}": { "schema": { "$ref": "#/entities/InstituteRegistrationRequest" }, "description": "Public institute self-registration applications pending Super Admin approval or auto-provisioning." },
+    "/platform_announcements/{annId}": { "schema": { "$ref": "#/entities/PlatformAnnouncement" }, "description": "Platform-wide announcements published by ZACMA Super Admin to institutes." },
+    "/departments/{deptId}": { "schema": { "$ref": "#/entities/Department" }, "description": "Tenant-isolated academic departments." },
+    "/class_batches/{batchId}": { "schema": { "$ref": "#/entities/ClassBatch" }, "description": "Tenant-isolated class cohorts and training batches." },
+    "/institute_documents/{docId}": { "schema": { "$ref": "#/entities/InstituteDocument" }, "description": "Tenant-isolated institutional document management library." }
   }
 }

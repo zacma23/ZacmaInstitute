@@ -212,11 +212,13 @@ service cloud.firestore {
 
     function isValidCourse(data) {
       return data.keys().hasAll(['code', 'name', 'category', 'durationWeeks', 'feeEtb', 'schedule', 'isActive', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['tenantId', 'code', 'name', 'category', 'durationWeeks', 'feeEtb', 'schedule', 'instructorId', 'instructorName', 'description', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'code', 'name', 'category', 'departmentId', 'departmentName', 'durationWeeks', 'feeEtb', 'schedule', 'instructorId', 'instructorName', 'description', 'isActive', 'createdAt', 'updatedAt'])
         && isOptionalString(data, 'tenantId', 80)
         && isNonEmptyString(data.code, 24)
         && isNonEmptyString(data.name, 120)
         && isNonEmptyString(data.category, 80)
+        && isOptionalString(data, 'departmentId', 128)
+        && isOptionalString(data, 'departmentName', 120)
         && isPositiveNumber(data.durationWeeks)
         && isPositiveNumber(data.feeEtb)
         && isNonEmptyString(data.schedule, 120)
@@ -852,7 +854,7 @@ service cloud.firestore {
     // ---------------------------------------------------------
     function isValidTenant(data) {
       return data.keys().hasAll(['tenantId', 'name', 'shortName', 'slug', 'businessType', 'email', 'phone', 'country', 'city', 'address', 'primaryColor', 'secondaryColor', 'studentIdPrefix', 'staffIdPrefix', 'receiptPrefix', 'currency', 'timezone', 'academicYear', 'paymentMethods', 'defaultLanguage', 'dateFormat', 'notificationEmailEnabled', 'notificationSmsEnabled', 'notificationWhatsappEnabled', 'emailGatewayStatus', 'smsGatewayStatus', 'whatsappGatewayStatus', 'status', 'planId', 'planCode', 'planName', 'billingCycle', 'monthlyPriceEtb', 'annualPriceEtb', 'studentLimit', 'staffLimit', 'storageLimitMb', 'storageUsedMb', 'aiMonthlyQuota', 'aiRequestsUsed', 'enabledModules', 'primaryAdminName', 'primaryAdminEmail', 'primaryAdminPhone', 'primaryAdminPosition', 'subscriptionStartDate', 'subscriptionExpiresAt', 'createdBy', 'createdByName', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['tenantId', 'name', 'shortName', 'slug', 'businessType', 'email', 'phone', 'country', 'city', 'address', 'website', 'logoUrl', 'primaryColor', 'secondaryColor', 'studentIdPrefix', 'staffIdPrefix', 'receiptPrefix', 'currency', 'timezone', 'academicYear', 'paymentMethods', 'defaultLanguage', 'dateFormat', 'invoiceFooterNote', 'notificationEmailEnabled', 'notificationSmsEnabled', 'notificationWhatsappEnabled', 'emailGatewayStatus', 'smsGatewayStatus', 'whatsappGatewayStatus', 'smsSenderLabel', 'status', 'planId', 'planCode', 'planName', 'billingCycle', 'monthlyPriceEtb', 'annualPriceEtb', 'studentLimit', 'staffLimit', 'storageLimitMb', 'storageUsedMb', 'aiMonthlyQuota', 'aiRequestsUsed', 'aiMonthlyTokenLimit', 'aiDocScanLimit', 'enabledModules', 'primaryAdminUid', 'primaryAdminName', 'primaryAdminEmail', 'primaryAdminPhone', 'primaryAdminPosition', 'subscriptionStartDate', 'trialEndsAt', 'subscriptionExpiresAt', 'suspendedReason', 'suspendedAt', 'isDefaultPlatformTenant', 'createdBy', 'createdByName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'name', 'shortName', 'slug', 'businessType', 'email', 'phone', 'country', 'city', 'address', 'website', 'logoUrl', 'primaryColor', 'secondaryColor', 'studentIdPrefix', 'staffIdPrefix', 'receiptPrefix', 'currency', 'timezone', 'academicYear', 'paymentMethods', 'defaultLanguage', 'dateFormat', 'invoiceFooterNote', 'notificationEmailEnabled', 'notificationSmsEnabled', 'notificationWhatsappEnabled', 'emailGatewayStatus', 'smsGatewayStatus', 'whatsappGatewayStatus', 'smsSenderLabel', 'status', 'planId', 'planCode', 'planName', 'billingCycle', 'monthlyPriceEtb', 'quarterlyPriceEtb', 'annualPriceEtb', 'studentLimit', 'staffLimit', 'storageLimitMb', 'storageUsedMb', 'aiMonthlyQuota', 'aiRequestsUsed', 'aiMonthlyTokenLimit', 'aiDocScanLimit', 'enabledModules', 'primaryAdminUid', 'primaryAdminName', 'primaryAdminEmail', 'primaryAdminPhone', 'primaryAdminPosition', 'subscriptionStartDate', 'trialEndsAt', 'subscriptionExpiresAt', 'suspendedReason', 'suspendedAt', 'isDefaultPlatformTenant', 'createdBy', 'createdByName', 'createdAt', 'updatedAt'])
         && isValidId(data.tenantId)
         && isNonEmptyString(data.name, 140)
         && isNonEmptyString(data.shortName, 40)
@@ -890,8 +892,9 @@ service cloud.firestore {
         && isNonEmptyString(data.planId, 80)
         && isNonEmptyString(data.planCode, 40)
         && isNonEmptyString(data.planName, 80)
-        && data.billingCycle in ['MONTHLY', 'ANNUAL', 'TRIAL', 'CUSTOM']
+        && data.billingCycle in ['MONTHLY', 'QUARTERLY', 'ANNUAL', 'TRIAL', 'CUSTOM']
         && isNonNegativeNumber(data.monthlyPriceEtb)
+        && (!('quarterlyPriceEtb' in data) || isNonNegativeNumber(data.quarterlyPriceEtb))
         && isNonNegativeNumber(data.annualPriceEtb)
         && isPositiveNumber(data.studentLimit)
         && isPositiveNumber(data.staffLimit)
@@ -921,11 +924,12 @@ service cloud.firestore {
 
     function isValidSubscriptionPlan(data) {
       return data.keys().hasAll(['code', 'name', 'tagline', 'monthlyPriceEtb', 'annualPriceEtb', 'trialDays', 'studentLimit', 'staffLimit', 'storageLimitMb', 'aiMonthlyQuota', 'includedModules', 'isActive', 'updatedAt'])
-        && data.keys().hasOnly(['code', 'name', 'tagline', 'monthlyPriceEtb', 'annualPriceEtb', 'trialDays', 'studentLimit', 'staffLimit', 'storageLimitMb', 'aiMonthlyQuota', 'includedModules', 'isActive', 'isFeatured', 'updatedAt'])
+        && data.keys().hasOnly(['code', 'name', 'tagline', 'monthlyPriceEtb', 'quarterlyPriceEtb', 'annualPriceEtb', 'trialDays', 'studentLimit', 'staffLimit', 'storageLimitMb', 'aiMonthlyQuota', 'includedModules', 'isActive', 'isFeatured', 'updatedAt'])
         && data.code in ['FREE_TRIAL', 'BASIC', 'PROFESSIONAL', 'ENTERPRISE', 'CUSTOM']
         && isNonEmptyString(data.name, 80)
         && isNonEmptyString(data.tagline, 160)
         && isNonNegativeNumber(data.monthlyPriceEtb)
+        && (!('quarterlyPriceEtb' in data) || isNonNegativeNumber(data.quarterlyPriceEtb))
         && isNonNegativeNumber(data.annualPriceEtb)
         && isNonNegativeNumber(data.trialDays)
         && isPositiveNumber(data.studentLimit)
@@ -946,7 +950,7 @@ service cloud.firestore {
         && isNonEmptyString(data.planId, 80)
         && isNonEmptyString(data.planCode, 40)
         && isNonEmptyString(data.planName, 80)
-        && data.billingCycle in ['MONTHLY', 'ANNUAL', 'TRIAL', 'CUSTOM']
+        && data.billingCycle in ['MONTHLY', 'QUARTERLY', 'ANNUAL', 'TRIAL', 'CUSTOM']
         && isNonNegativeNumber(data.priceEtb)
         && isValidCurrency(data.currency)
         && data.status in ['ACTIVE', 'TRIAL', 'OVERDUE', 'EXPIRED', 'CANCELLED', 'SUSPENDED']
@@ -969,7 +973,7 @@ service cloud.firestore {
         && isNonEmptyString(data.tenantName, 140)
         && isNonEmptyString(data.subscriptionId, 128)
         && isNonEmptyString(data.planName, 80)
-        && data.billingCycle in ['MONTHLY', 'ANNUAL', 'TRIAL', 'CUSTOM']
+        && data.billingCycle in ['MONTHLY', 'QUARTERLY', 'ANNUAL', 'TRIAL', 'CUSTOM']
         && isNonNegativeNumber(data.amountEtb)
         && isValidCurrency(data.currency)
         && isNonEmptyString(data.dueDate, 20)
@@ -1042,7 +1046,7 @@ service cloud.firestore {
 
     function isValidPlatformGlobalSettings(data) {
       return data.keys().hasAll(['platformName', 'supportEmail', 'supportPhone', 'defaultCurrency', 'defaultLanguage', 'defaultTrialDays', 'gracePeriodDays', 'autoSuspendExpiredDays', 'allowSelfSignupInstitutes', 'enforceSupportSessionReason', 'maxSupportSessionMinutes', 'updatedAt'])
-        && data.keys().hasOnly(['platformName', 'supportEmail', 'supportPhone', 'defaultCurrency', 'defaultLanguage', 'defaultTrialDays', 'gracePeriodDays', 'autoSuspendExpiredDays', 'allowSelfSignupInstitutes', 'enforceSupportSessionReason', 'maxSupportSessionMinutes', 'defaultAiModel', 'aiMonthlyTokenLimit', 'aiDocScanLimit', 'updatedBy', 'updatedByName', 'updatedAt'])
+        && data.keys().hasOnly(['platformName', 'supportEmail', 'supportPhone', 'defaultCurrency', 'defaultLanguage', 'defaultTrialDays', 'gracePeriodDays', 'autoSuspendExpiredDays', 'allowSelfSignupInstitutes', 'autoApproveInstituteRegistrations', 'enforceSupportSessionReason', 'maxSupportSessionMinutes', 'defaultAiModel', 'aiMonthlyTokenLimit', 'aiDocScanLimit', 'updatedBy', 'updatedByName', 'updatedAt'])
         && isNonEmptyString(data.platformName, 120)
         && isNonEmptyString(data.supportEmail, 160)
         && isNonEmptyString(data.supportPhone, 30)
@@ -1052,6 +1056,7 @@ service cloud.firestore {
         && isNonNegativeNumber(data.gracePeriodDays) && data.gracePeriodDays <= 90
         && isNonNegativeNumber(data.autoSuspendExpiredDays) && data.autoSuspendExpiredDays <= 90
         && data.allowSelfSignupInstitutes is bool
+        && (!('autoApproveInstituteRegistrations' in data) || data.autoApproveInstituteRegistrations is bool)
         && data.enforceSupportSessionReason is bool
         && isPositiveNumber(data.maxSupportSessionMinutes) && data.maxSupportSessionMinutes <= 240
         && (!('defaultAiModel' in data) || data.defaultAiModel in ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'])
@@ -1059,6 +1064,122 @@ service cloud.firestore {
         && (!('aiDocScanLimit' in data) || isNonNegativeNumber(data.aiDocScanLimit))
         && isOptionalString(data, 'updatedBy', 128)
         && isOptionalString(data, 'updatedByName', 120)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isAutoApproveEnabled() {
+      return exists(/databases/$(database)/documents/platform_settings/default)
+        && get(/databases/$(database)/documents/platform_settings/default).data.allowSelfSignupInstitutes == true
+        && ('autoApproveInstituteRegistrations' in get(/databases/$(database)/documents/platform_settings/default).data)
+        && get(/databases/$(database)/documents/platform_settings/default).data.autoApproveInstituteRegistrations == true;
+    }
+
+    function isValidInstituteRegistrationRequest(data) {
+      return data.keys().hasAll(['instituteName', 'shortName', 'slug', 'businessType', 'email', 'phone', 'country', 'city', 'address', 'primaryColor', 'secondaryColor', 'currency', 'selectedPlanId', 'selectedPlanCode', 'selectedPlanName', 'billingCycle', 'adminFullName', 'adminEmail', 'adminPhone', 'adminPosition', 'applicantUid', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['instituteName', 'shortName', 'slug', 'businessType', 'email', 'phone', 'country', 'city', 'address', 'website', 'logoUrl', 'primaryColor', 'secondaryColor', 'currency', 'selectedPlanId', 'selectedPlanCode', 'selectedPlanName', 'billingCycle', 'adminFullName', 'adminEmail', 'adminPhone', 'adminPosition', 'applicantUid', 'status', 'provisionedTenantId', 'rejectionReason', 'reviewedBy', 'reviewedByName', 'reviewedAt', 'createdAt', 'updatedAt'])
+        && isNonEmptyString(data.instituteName, 140)
+        && isNonEmptyString(data.shortName, 40)
+        && isNonEmptyString(data.slug, 80)
+        && isNonEmptyString(data.businessType, 80)
+        && isNonEmptyString(data.email, 160)
+        && isNonEmptyString(data.phone, 30)
+        && isNonEmptyString(data.country, 80)
+        && isNonEmptyString(data.city, 80)
+        && isNonEmptyString(data.address, 240)
+        && isOptionalString(data, 'website', 200)
+        && isOptionalString(data, 'logoUrl', 90000)
+        && isNonEmptyString(data.primaryColor, 20)
+        && isNonEmptyString(data.secondaryColor, 20)
+        && isValidCurrency(data.currency)
+        && isNonEmptyString(data.selectedPlanId, 80)
+        && isNonEmptyString(data.selectedPlanCode, 40)
+        && isNonEmptyString(data.selectedPlanName, 80)
+        && data.billingCycle in ['MONTHLY', 'QUARTERLY', 'ANNUAL', 'TRIAL', 'CUSTOM']
+        && isNonEmptyString(data.adminFullName, 120)
+        && isNonEmptyString(data.adminEmail, 160)
+        && isNonEmptyString(data.adminPhone, 30)
+        && isNonEmptyString(data.adminPosition, 80)
+        && isNonEmptyString(data.applicantUid, 128)
+        && data.status in ['PENDING', 'APPROVED', 'REJECTED']
+        && isOptionalString(data, 'provisionedTenantId', 80)
+        && isOptionalString(data, 'rejectionReason', 300)
+        && isOptionalString(data, 'reviewedBy', 128)
+        && isOptionalString(data, 'reviewedByName', 120)
+        && isOptionalString(data, 'reviewedAt', 40)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidPlatformAnnouncement(data) {
+      return data.keys().hasAll(['title', 'message', 'severity', 'targetAudience', 'isActive', 'createdBy', 'createdByName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['title', 'message', 'severity', 'targetAudience', 'targetTenantId', 'isActive', 'expiresAt', 'createdBy', 'createdByName', 'createdAt', 'updatedAt'])
+        && isNonEmptyString(data.title, 160)
+        && isNonEmptyString(data.message, 800)
+        && data.severity in ['INFO', 'WARNING', 'SUCCESS', 'CRITICAL']
+        && data.targetAudience in ['ALL_INSTITUTES', 'TRIAL_INSTITUTES', 'ACTIVE_INSTITUTES', 'SPECIFIC_TENANT']
+        && isOptionalString(data, 'targetTenantId', 80)
+        && data.isActive is bool
+        && isOptionalString(data, 'expiresAt', 20)
+        && isNonEmptyString(data.createdBy, 128)
+        && isNonEmptyString(data.createdByName, 120)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidDepartment(data) {
+      return data.keys().hasAll(['tenantId', 'code', 'name', 'isActive', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'code', 'name', 'headName', 'description', 'isActive', 'createdBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.tenantId)
+        && isNonEmptyString(data.code, 24)
+        && isNonEmptyString(data.name, 120)
+        && isOptionalString(data, 'headName', 120)
+        && isOptionalString(data, 'description', 400)
+        && data.isActive is bool
+        && isNonEmptyString(data.createdBy, 128)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidClassBatch(data) {
+      return data.keys().hasAll(['tenantId', 'batchCode', 'name', 'courseId', 'courseName', 'schedule', 'startDate', 'endDate', 'capacity', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'batchCode', 'name', 'courseId', 'courseName', 'departmentId', 'departmentName', 'instructorId', 'instructorName', 'room', 'schedule', 'startDate', 'endDate', 'capacity', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.tenantId)
+        && isNonEmptyString(data.batchCode, 32)
+        && isNonEmptyString(data.name, 120)
+        && isNonEmptyString(data.courseId, 128)
+        && isNonEmptyString(data.courseName, 120)
+        && isOptionalString(data, 'departmentId', 128)
+        && isOptionalString(data, 'departmentName', 120)
+        && isOptionalString(data, 'instructorId', 128)
+        && isOptionalString(data, 'instructorName', 120)
+        && isOptionalString(data, 'room', 80)
+        && isNonEmptyString(data.schedule, 140)
+        && isNonEmptyString(data.startDate, 20)
+        && isNonEmptyString(data.endDate, 20)
+        && isPositiveNumber(data.capacity)
+        && data.status in ['UPCOMING', 'ACTIVE', 'COMPLETED', 'ARCHIVED']
+        && isNonEmptyString(data.createdBy, 128)
+        && isNonEmptyString(data.createdAt, 40)
+        && isNonEmptyString(data.updatedAt, 40);
+    }
+
+    function isValidInstituteDocument(data) {
+      return data.keys().hasAll(['tenantId', 'title', 'category', 'fileName', 'fileMimeType', 'fileSizeBytes', 'fileDataUrl', 'visibility', 'uploadedBy', 'uploadedByName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'title', 'category', 'description', 'fileName', 'fileMimeType', 'fileSizeBytes', 'fileDataUrl', 'visibility', 'departmentName', 'courseName', 'uploadedBy', 'uploadedByName', 'createdAt', 'updatedAt'])
+        && isValidId(data.tenantId)
+        && isNonEmptyString(data.title, 160)
+        && data.category in ['SYLLABUS', 'POLICY', 'HANDBOOK', 'CERTIFICATE_TEMPLATE', 'FEE_SCHEDULE', 'FORM', 'OTHER']
+        && isOptionalString(data, 'description', 400)
+        && isNonEmptyString(data.fileName, 160)
+        && isNonEmptyString(data.fileMimeType, 100)
+        && isPositiveNumber(data.fileSizeBytes) && data.fileSizeBytes <= 650000
+        && data.fileDataUrl is string && data.fileDataUrl.size() >= 10 && data.fileDataUrl.size() <= 650000
+        && data.visibility in ['ALL_STAFF', 'ADMIN_ONLY', 'STUDENTS_AND_STAFF']
+        && isOptionalString(data, 'departmentName', 120)
+        && isOptionalString(data, 'courseName', 120)
+        && isNonEmptyString(data.uploadedBy, 128)
+        && isNonEmptyString(data.uploadedByName, 120)
+        && isNonEmptyString(data.createdAt, 40)
         && isNonEmptyString(data.updatedAt, 40);
     }
 
@@ -1207,7 +1328,17 @@ service cloud.firestore {
           && incoming().uid == existing().uid
           && incoming().role == 'ADMIN'
           && incoming().platformRole == 'SUPER_ADMIN'
-          && docTenantId(incoming()) == 'zacma_default')
+          && docTenantId(incoming()) == 'zacma_default') ||
+        (profileId == request.auth.uid
+          && isAutoApproveEnabled()
+          && incoming().uid == existing().uid
+          && !('platformRole' in incoming())
+          && !('platformRole' in existing())
+          && incoming().role == 'ADMIN'
+          && ('tenantId' in incoming())
+          && incoming().tenantId != 'zacma_default'
+          && exists(/databases/$(database)/documents/tenants/$(incoming().tenantId))
+          && get(/databases/$(database)/documents/tenants/$(incoming().tenantId)).data.primaryAdminUid == request.auth.uid)
       );
       allow delete: if isSignedIn() && isValidId(profileId) && profileId != request.auth.uid && (
         isPlatformSuperAdmin() ||
@@ -1800,9 +1931,12 @@ service cloud.firestore {
     // 34. Tenants (Training Institutes — Platform manages; Institute Admin updates own branding only)
     // ---------------------------------------------------------
     match /tenants/{tenantId} {
-      allow get: if isSignedIn() && isValidId(tenantId) && (isPlatformStaff() || tenantId == userTenantId());
+      allow get: if isSignedIn() && isValidId(tenantId) && (isPlatformStaff() || tenantId == userTenantId() || existing().primaryAdminUid == request.auth.uid);
       allow list: if isSignedIn() && (isPlatformStaff() || existing().tenantId == userTenantId());
-      allow create: if isSignedIn() && isValidId(tenantId) && isValidTenant(incoming()) && incoming().tenantId == tenantId && isPlatformAdmin();
+      allow create: if isSignedIn() && isValidId(tenantId) && isValidTenant(incoming()) && incoming().tenantId == tenantId && (
+        isPlatformAdmin() ||
+        (isAutoApproveEnabled() && tenantId != 'zacma_default' && incoming().primaryAdminUid == request.auth.uid && incoming().createdBy == request.auth.uid && incoming().status in ['TRIAL', 'ACTIVE'])
+      );
       allow update: if isSignedIn() && isValidId(tenantId) && isValidTenant(incoming())
         && incoming().tenantId == existing().tenantId
         && incoming().createdAt == existing().createdAt
@@ -1811,6 +1945,7 @@ service cloud.firestore {
           (isAdmin()
             && tenantId == userTenantId()
             && existing().status != 'SUSPENDED'
+            && incoming().status in ['ACTIVE', 'TRIAL']
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'name',
               'shortName',
@@ -1840,6 +1975,21 @@ service cloud.firestore {
               'smsGatewayStatus',
               'whatsappGatewayStatus',
               'smsSenderLabel',
+              'status',
+              'planId',
+              'planCode',
+              'planName',
+              'billingCycle',
+              'monthlyPriceEtb',
+              'quarterlyPriceEtb',
+              'annualPriceEtb',
+              'studentLimit',
+              'staffLimit',
+              'storageLimitMb',
+              'aiMonthlyQuota',
+              'enabledModules',
+              'subscriptionStartDate',
+              'subscriptionExpiresAt',
               'updatedAt'
             ]))
         );
@@ -1847,23 +1997,30 @@ service cloud.firestore {
     }
 
     // ---------------------------------------------------------
-    // 35. Subscription Plans (Platform Admin manages; Institute Admins read active plans)
+    // 35. Subscription Plans (Platform Admin manages; signed-in users read active catalog)
     // ---------------------------------------------------------
     match /subscription_plans/{planId} {
-      allow get: if isSignedIn() && isValidId(planId) && (isPlatformStaff() || isAdmin());
-      allow list: if isSignedIn() && (isPlatformStaff() || (isAdmin() && existing().isActive == true));
+      allow get: if isSignedIn() && isValidId(planId) && (isPlatformStaff() || existing().isActive == true);
+      allow list: if isSignedIn() && (isPlatformStaff() || existing().isActive == true);
       allow create, update: if isSignedIn() && isValidId(planId) && isValidSubscriptionPlan(incoming()) && isPlatformAdmin();
       allow delete: if isSignedIn() && isValidId(planId) && isPlatformSuperAdmin();
     }
 
     // ---------------------------------------------------------
-    // 36. Platform Subscriptions (Platform Finance/Admin manages; Institute Admin reads own only)
+    // 36. Platform Subscriptions (Platform Finance/Admin manages; Institute Admin reads own & renews via Chapa)
     // ---------------------------------------------------------
     match /platform_subscriptions/{subId} {
       allow get: if isSignedIn() && isValidId(subId) && (isPlatformStaff() || (isAdmin() && existing().tenantId == userTenantId()));
       allow list: if isSignedIn() && (isPlatformStaff() || (isAdmin() && existing().tenantId == userTenantId()));
-      allow create: if isSignedIn() && isValidId(subId) && isValidPlatformSubscription(incoming()) && isPlatformFinance();
-      allow update: if isSignedIn() && isValidId(subId) && isValidPlatformSubscription(incoming()) && incoming().tenantId == existing().tenantId && incoming().createdAt == existing().createdAt && isPlatformFinance();
+      allow create: if isSignedIn() && isValidId(subId) && isValidPlatformSubscription(incoming()) && (
+        isPlatformFinance() ||
+        (isAutoApproveEnabled() && incoming().updatedBy == request.auth.uid && incoming().tenantId != 'zacma_default') ||
+        (isAdmin() && incoming().tenantId == userTenantId() && incoming().updatedBy == request.auth.uid)
+      );
+      allow update: if isSignedIn() && isValidId(subId) && isValidPlatformSubscription(incoming()) && incoming().tenantId == existing().tenantId && incoming().createdAt == existing().createdAt && (
+        isPlatformFinance() ||
+        (isAdmin() && existing().tenantId == userTenantId() && existing().status != 'SUSPENDED' && incoming().status in ['ACTIVE', 'TRIAL'] && incoming().updatedBy == request.auth.uid)
+      );
       allow delete: if isSignedIn() && isValidId(subId) && isPlatformSuperAdmin();
     }
 
@@ -1873,18 +2030,24 @@ service cloud.firestore {
     match /platform_invoices/{invoiceId} {
       allow get: if isSignedIn() && isValidId(invoiceId) && (isPlatformStaff() || (isAdmin() && existing().tenantId == userTenantId()));
       allow list: if isSignedIn() && (isPlatformStaff() || (isAdmin() && existing().tenantId == userTenantId()));
-      allow create: if isSignedIn() && isValidId(invoiceId) && isValidPlatformInvoice(incoming()) && isPlatformFinance();
+      allow create: if isSignedIn() && isValidId(invoiceId) && isValidPlatformInvoice(incoming()) && (
+        isPlatformFinance() ||
+        (isAdmin() && incoming().tenantId == userTenantId() && incoming().issuedBy == request.auth.uid && ('paymentRef' in incoming()))
+      );
       allow update: if isSignedIn() && isValidId(invoiceId) && isValidPlatformInvoice(incoming()) && incoming().tenantId == existing().tenantId && incoming().invoiceNumber == existing().invoiceNumber && incoming().createdAt == existing().createdAt && isPlatformFinance();
       allow delete: if false;
     }
 
     // ---------------------------------------------------------
-    // 38. Platform Payments (ZACMA SaaS Subscription Revenue — Strictly Platform Finance Only)
+    // 38. Platform Payments (ZACMA SaaS Subscription Revenue — Platform Finance or Chapa Self-Service Verified)
     // ---------------------------------------------------------
     match /platform_payments/{paymentId} {
       allow get: if isSignedIn() && isValidId(paymentId) && (isPlatformStaff() || (isAdmin() && existing().tenantId == userTenantId()));
       allow list: if isSignedIn() && (isPlatformStaff() || (isAdmin() && existing().tenantId == userTenantId()));
-      allow create: if isSignedIn() && isValidId(paymentId) && isValidPlatformPayment(incoming()) && isPlatformFinance() && incoming().recordedBy == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(paymentId) && isValidPlatformPayment(incoming()) && incoming().recordedBy == request.auth.uid && (
+        isPlatformFinance() ||
+        (isAdmin() && incoming().tenantId == userTenantId() && incoming().paymentMethod == 'Chapa' && incoming().status == 'COMPLETED')
+      );
       allow update: if isSignedIn() && isValidId(paymentId) && isValidPlatformPayment(incoming()) && incoming().tenantId == existing().tenantId && incoming().createdAt == existing().createdAt && isPlatformSuperAdmin();
       allow delete: if false;
     }
@@ -1944,7 +2107,7 @@ service cloud.firestore {
     // 41. Platform Global Settings (ZACMA Platform Admin manages)
     // ---------------------------------------------------------
     match /platform_settings/{settingId} {
-      allow get: if isSignedIn() && isValidId(settingId) && (isPlatformStaff() || isAdmin());
+      allow get: if isSignedIn() && isValidId(settingId) && (isPlatformStaff() || settingId == 'default');
       allow list: if isSignedIn() && isPlatformStaff();
       allow create, update: if isSignedIn() && isValidId(settingId) && isValidPlatformGlobalSettings(incoming()) && isPlatformAdmin();
       allow delete: if false;
@@ -2006,6 +2169,97 @@ service cloud.firestore {
         && incoming().userId == request.auth.uid
         && (isPlatformStaff() || incoming().tenantId == userTenantId());
       allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // 45. Institute Self-Registration Requests (Applicant reads/submits own; Super Admin reviews & approves)
+    // ---------------------------------------------------------
+    match /institute_registration_requests/{reqId} {
+      allow get: if isSignedIn() && isValidId(reqId) && (isPlatformStaff() || existing().applicantUid == request.auth.uid);
+      allow list: if isSignedIn() && (isPlatformStaff() || existing().applicantUid == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(reqId)
+        && isValidInstituteRegistrationRequest(incoming())
+        && incoming().applicantUid == request.auth.uid
+        && (incoming().status == 'PENDING' || (isAutoApproveEnabled() && incoming().status == 'APPROVED'));
+      allow update: if isSignedIn() && isValidId(reqId)
+        && isValidInstituteRegistrationRequest(incoming())
+        && incoming().applicantUid == existing().applicantUid
+        && incoming().createdAt == existing().createdAt
+        && isPlatformAdmin();
+      allow delete: if isSignedIn() && isValidId(reqId) && isPlatformSuperAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 46. Platform-Wide Announcements (Super Admin publishes; institutes read active banners)
+    // ---------------------------------------------------------
+    match /platform_announcements/{annId} {
+      allow get: if isSignedIn() && isValidId(annId) && (isPlatformStaff() || existing().isActive == true);
+      allow list: if isSignedIn() && (isPlatformStaff() || existing().isActive == true);
+      allow create, update: if isSignedIn() && isValidId(annId) && isValidPlatformAnnouncement(incoming()) && isPlatformAdmin();
+      allow delete: if isSignedIn() && isValidId(annId) && isPlatformAdmin();
+    }
+
+    // ---------------------------------------------------------
+    // 47. Academic Departments (Strictly Tenant-Isolated)
+    // ---------------------------------------------------------
+    match /departments/{deptId} {
+      allow get: if isSignedIn() && isValidId(deptId) && (isStaff() || isStudent()) && isSameTenant(existing());
+      allow list: if isSignedIn() && (isStaff() || isStudent()) && isSameTenant(existing());
+      allow create: if isSignedIn() && isValidId(deptId) && isValidDepartment(incoming()) && (
+        isPlatformAdmin() ||
+        (isAdmin() && isSameTenant(incoming()) && isTenantWritable(userTenantId())) ||
+        (isAutoApproveEnabled() && incoming().createdBy == request.auth.uid && incoming().tenantId != 'zacma_default')
+      );
+      allow update: if isSignedIn() && isValidId(deptId) && isValidDepartment(incoming()) && incoming().createdAt == existing().createdAt && docTenantId(incoming()) == docTenantId(existing()) && (isPlatformAdmin() || (isAdmin() && isSameTenant(existing()) && isTenantWritable(userTenantId())));
+      allow delete: if isSignedIn() && isValidId(deptId) && (isPlatformAdmin() || (isAdmin() && isSameTenant(existing()) && isTenantWritable(userTenantId())));
+    }
+
+    // ---------------------------------------------------------
+    // 48. Class & Batch Management (Strictly Tenant-Isolated)
+    // ---------------------------------------------------------
+    match /class_batches/{batchId} {
+      allow get: if isSignedIn() && isValidId(batchId) && (isStaff() || isStudent()) && isSameTenant(existing());
+      allow list: if isSignedIn() && (isStaff() || isStudent()) && isSameTenant(existing());
+      allow create: if isSignedIn() && isValidId(batchId) && isValidClassBatch(incoming()) && (
+        isPlatformAdmin() ||
+        ((isAdmin() || isManager()) && isSameTenant(incoming()) && isTenantWritable(userTenantId()))
+      );
+      allow update: if isSignedIn() && isValidId(batchId) && isValidClassBatch(incoming()) && incoming().createdAt == existing().createdAt && docTenantId(incoming()) == docTenantId(existing()) && (
+        isPlatformAdmin() ||
+        ((isAdmin() || isManager()) && isSameTenant(existing()) && isTenantWritable(userTenantId()))
+      );
+      allow delete: if isSignedIn() && isValidId(batchId) && (isPlatformAdmin() || (isAdmin() && isSameTenant(existing()) && isTenantWritable(userTenantId())));
+    }
+
+    // ---------------------------------------------------------
+    // 49. Institutional Document Library (Strictly Tenant & Visibility Isolated)
+    // ---------------------------------------------------------
+    match /institute_documents/{docId} {
+      allow get: if isSignedIn() && isValidId(docId) && isSameTenant(existing()) && (
+        isPlatformStaff() ||
+        isAdmin() ||
+        (isStaff() && existing().visibility in ['ALL_STAFF', 'STUDENTS_AND_STAFF']) ||
+        (isStudent() && existing().visibility == 'STUDENTS_AND_STAFF')
+      );
+      allow list: if isSignedIn() && isSameTenant(existing()) && (
+        isPlatformStaff() ||
+        isAdmin() ||
+        (isStaff() && existing().visibility in ['ALL_STAFF', 'STUDENTS_AND_STAFF']) ||
+        (isStudent() && existing().visibility == 'STUDENTS_AND_STAFF')
+      );
+      allow create: if isSignedIn() && isValidId(docId) && isValidInstituteDocument(incoming()) && isSameTenant(incoming()) && isTenantWritable(docTenantId(incoming())) && incoming().uploadedBy == request.auth.uid && (
+        isPlatformAdmin() ||
+        isAdmin() ||
+        isManager() ||
+        isInstructor() ||
+        isHrOfficer()
+      );
+      allow update: if isSignedIn() && isValidId(docId) && isValidInstituteDocument(incoming()) && incoming().createdAt == existing().createdAt && incoming().uploadedBy == existing().uploadedBy && docTenantId(incoming()) == docTenantId(existing()) && isSameTenant(existing()) && isTenantWritable(docTenantId(existing())) && (
+        isPlatformAdmin() ||
+        isAdmin() ||
+        (isManager() && existing().uploadedBy == request.auth.uid)
+      );
+      allow delete: if isSignedIn() && isValidId(docId) && isSameTenant(existing()) && (isPlatformAdmin() || (isAdmin() && isTenantWritable(docTenantId(existing()))));
     }
   }
 }

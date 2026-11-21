@@ -16,10 +16,12 @@ import {
   Lock,
   Mail,
   ShieldCheck,
+  Sparkles,
   User as UserIcon,
 } from 'lucide-react';
 import { usePortal } from '../context/PortalContext';
 import { ZacmaLogo } from './ZacmaLogo';
+import { PublicInstituteRegistration } from './PublicInstituteRegistration';
 
 type PortalTab = 'STAFF' | 'STUDENT';
 type AuthMode = 'SIGN_IN' | 'SIGN_UP' | 'RESET';
@@ -35,8 +37,13 @@ export function LoginScreen() {
     authError,
     sessionExpiredNotice,
     clearSessionExpiredNotice,
+    detectedInstituteSlug,
   } = usePortal();
 
+  const [showRegisterInstitute, setShowRegisterInstitute] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.location.pathname === '/register-institute';
+  });
   const [portalTab, setPortalTab] = useState<PortalTab>('STAFF');
   const [authMode, setAuthMode] = useState<AuthMode>('SIGN_IN');
   const [fullName, setFullName] = useState('');
@@ -139,6 +146,19 @@ export function LoginScreen() {
   const busy = authLoading || submitting;
   const activeError = localError || authError;
 
+  if (showRegisterInstitute) {
+    return (
+      <PublicInstituteRegistration
+        onBack={() => {
+          setShowRegisterInstitute(false);
+          if (window.location.pathname === '/register-institute') {
+            window.history.replaceState(null, '', '/');
+          }
+        }}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 grid grid-cols-1 lg:grid-cols-12">
       {/* Left Institutional Brand Rail */}
@@ -146,27 +166,41 @@ export function LoginScreen() {
         <div className="h-1.5 w-full zacma-brand-stripe shrink-0" />
         <div className="p-8 sm:p-12 lg:p-16 flex-1 flex flex-col justify-between">
           <div>
-            <div className="mb-12">
+            <div className="mb-10">
               <ZacmaLogo
                 variant="lockup"
                 theme="dark"
                 size="lg"
                 framed
-                subtitle="Student Fee Management & Institutional Accounting Portal"
+                subtitle="ZACMA Institute Management System (ZIMS)"
               />
             </div>
 
             <div className="inline-flex items-center gap-2 text-xs font-semibold text-blue-300 mb-4">
               <span className="w-6 h-0.5 bg-blue-500 rounded-full" />
-              <span>Enterprise Educational Finance Platform</span>
+              <span>Multi-Tenant Training Institute SaaS Platform</span>
             </div>
 
             <h1 className="text-3xl sm:text-4xl font-display font-extrabold tracking-tight text-white max-w-xl leading-tight mb-5">
-              Student Fee Management &amp; Institutional Accounting Portal
+              ZACMA Institute Management System (ZIMS)
             </h1>
-            <p className="text-sm sm:text-base text-slate-300 max-w-lg leading-relaxed mb-10">
-              Centralized admissions approval, ETB tuition installment tracking, maker-checker payment verification, official receipt issuance, automated fee reminders, and daily class attendance for ZACMA Technology &amp; Training Institute.
+            <p className="text-sm sm:text-base text-slate-300 max-w-lg leading-relaxed mb-8">
+              Complete cloud SaaS platform for training institutes — isolated multi-tenant workspaces, AI ID scanning &amp; QR registration, ETB tuition &amp; Chapa online payments, departments, class batches, attendance, Excel reports, and role-isolated AI assistants.
             </p>
+
+            <div className="mb-10 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowRegisterInstitute(true)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#172DEB] hover:bg-blue-600 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
+              >
+                <Building2 className="w-4 h-4" />
+                <span>Register Your Institute</span>
+              </button>
+              <span className="text-xs text-slate-400">
+                14-Day Free Trial · Dedicated <code className="text-blue-300">/institute/your-name</code> Workspace
+              </span>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-8 border-t border-slate-800">
               <div>
@@ -213,10 +247,30 @@ export function LoginScreen() {
       <div className="lg:col-span-5 flex items-center justify-center p-6 sm:p-10 bg-white">
         <div className="w-full max-w-md">
           {/* Compact Official Brand Mark on Authentication Side */}
-          <div className="flex items-center justify-between mb-6 pb-5 border-b border-slate-200">
-            <ZacmaLogo variant="lockup" theme="light" size="sm" subtitle="Official Portal Sign-In" />
-            <span className="text-[11px] font-mono font-semibold text-slate-500">ETB</span>
+          <div className="flex items-center justify-between mb-5 pb-4 border-b border-slate-200">
+            <ZacmaLogo variant="lockup" theme="light" size="sm" subtitle="ZIMS Portal Sign-In" />
+            <button
+              type="button"
+              onClick={() => setShowRegisterInstitute(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 text-[11px] font-bold text-[#172DEB] transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Register Institute</span>
+            </button>
           </div>
+
+          {detectedInstituteSlug && (
+            <div className="mb-4 px-3.5 py-2.5 rounded-lg bg-slate-900 text-white text-xs flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-blue-400 shrink-0" />
+                <span>
+                  Institute Portal:{' '}
+                  <strong className="font-mono text-blue-300">/institute/{detectedInstituteSlug}</strong>
+                </span>
+              </span>
+              <span className="text-[10px] text-slate-400">Tenant Isolated</span>
+            </div>
+          )}
           {/* Portal Role Switcher: Staff vs Student */}
           <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-xl mb-6 border border-slate-200">
             <button

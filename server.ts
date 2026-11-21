@@ -32,6 +32,11 @@ import {
   handleChapaWebhook,
 } from './server/chapaGateway.ts';
 import { handleScanIdDocument } from './server/idScanner.ts';
+import {
+  buildRateLimitHeaders,
+  checkApiRateLimit,
+  extractClientIp,
+} from './server/rateLimiter.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +53,25 @@ async function createApp() {
       },
     })
   );
+
+  app.use('/api', (req: Request, res: Response, next) => {
+    const clientIp = extractClientIp(
+      req.headers as Record<string, string | string[] | undefined>,
+      req.ip || req.socket?.remoteAddress
+    );
+    const rl = checkApiRateLimit(`/api${req.path}`, clientIp);
+    const rlHeaders = buildRateLimitHeaders(rl);
+    Object.entries(rlHeaders).forEach(([k, v]) => res.setHeader(k, v));
+    if (!rl.allowed) {
+      res.status(429).json({
+        code: 'RATE_LIMIT_EXCEEDED',
+        error: `Too many requests to ${rl.bucket} API. Please retry after ${rl.retryAfterSec} seconds.`,
+        retryAfterSec: rl.retryAfterSec,
+      });
+      return;
+    }
+    next();
+  });
 
   app.get('/api/health', (_req: Request, res: Response) => {
     const out = handleHealth();

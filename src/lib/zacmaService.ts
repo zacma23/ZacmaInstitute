@@ -424,6 +424,8 @@ export async function saveCourse(
     code: string;
     name: string;
     category: string;
+    departmentId?: string;
+    departmentName?: string;
     durationWeeks: number;
     feeEtb: number;
     schedule: string;
@@ -449,6 +451,8 @@ export async function saveCourse(
       code: courseData.code.trim().toUpperCase().slice(0, 24),
       name: courseData.name.trim().slice(0, 120),
       category: courseData.category.trim().slice(0, 80),
+      departmentId: courseData.departmentId?.trim() || undefined,
+      departmentName: courseData.departmentName?.trim().slice(0, 120) || undefined,
       durationWeeks: Number(courseData.durationWeeks),
       feeEtb: Number(courseData.feeEtb),
       schedule: courseData.schedule.trim().slice(0, 120),

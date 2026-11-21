@@ -11,6 +11,7 @@ import {
   KeyRound,
   Lock,
   Mail,
+  Megaphone,
   MessageSquare,
   Play,
   RefreshCw,
@@ -22,6 +23,7 @@ import {
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Trash2,
   UserCheck,
   Users,
   X,
@@ -29,11 +31,14 @@ import {
 import { usePortal } from '../../context/PortalContext';
 import {
   DEFAULT_ZACMA_TENANT_ID,
+  deletePlatformAnnouncement,
   INSTITUTE_ROLE_LABELS,
   LegacyMigrationResult,
   migrateLegacyZacmaRecordsToTenant,
   PLATFORM_ROLE_LABELS,
+  publishPlatformAnnouncement,
   sendSubscriptionExpiryReminder,
+  togglePlatformAnnouncement,
   updateGlobalPlatformSettings,
   updateSupportTicket,
   updateTenantLimits,
@@ -46,6 +51,7 @@ import {
   AiModelId,
   AiSecurityAuditScenarioResult,
   formatDateShort,
+  PlatformAnnouncement,
   PlatformGlobalSettings,
   PlatformRole,
   SaasModuleCode,
@@ -317,6 +323,7 @@ export function GlobalSettingsView() {
     gracePeriodDays: platformSettings.gracePeriodDays,
     autoSuspendExpiredDays: platformSettings.autoSuspendExpiredDays,
     allowSelfSignupInstitutes: platformSettings.allowSelfSignupInstitutes,
+    autoApproveInstituteRegistrations: Boolean(platformSettings.autoApproveInstituteRegistrations),
     enforceSupportSessionReason: platformSettings.enforceSupportSessionReason,
     maxSupportSessionMinutes: platformSettings.maxSupportSessionMinutes,
   });
@@ -333,6 +340,7 @@ export function GlobalSettingsView() {
       gracePeriodDays: platformSettings.gracePeriodDays,
       autoSuspendExpiredDays: platformSettings.autoSuspendExpiredDays,
       allowSelfSignupInstitutes: platformSettings.allowSelfSignupInstitutes,
+      autoApproveInstituteRegistrations: Boolean(platformSettings.autoApproveInstituteRegistrations),
       enforceSupportSessionReason: platformSettings.enforceSupportSessionReason,
       maxSupportSessionMinutes: platformSettings.maxSupportSessionMinutes,
     });
@@ -538,7 +546,15 @@ export function GlobalSettingsView() {
               <input
                 type="checkbox"
                 checked={form.allowSelfSignupInstitutes}
-                onChange={(e) => setForm({ ...form, allowSelfSignupInstitutes: e.target.checked })}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    allowSelfSignupInstitutes: e.target.checked,
+                    autoApproveInstituteRegistrations: e.target.checked
+                      ? form.autoApproveInstituteRegistrations
+                      : false,
+                  })
+                }
                 className="mt-0.5 rounded border-slate-300 text-blue-700 focus:ring-blue-700"
               />
               <div>
@@ -546,7 +562,31 @@ export function GlobalSettingsView() {
                   Allow Public Self-Service Institute Registration Applications
                 </p>
                 <p className="text-[11px] text-slate-500">
-                  When disabled, only authorized ZACMA Super Admins and Platform Admins can provision new training institutes.
+                  Enables the public &ldquo;Register Your Institute&rdquo; portal on the ZIMS sign-in screen. When disabled, only ZACMA Super Admins can provision new training institutes.
+                </p>
+              </div>
+            </label>
+
+            <label
+              className={`flex items-start gap-3 p-3 rounded-lg border border-slate-200 bg-slate-50/70 ${
+                form.allowSelfSignupInstitutes ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'
+              }`}
+            >
+              <input
+                type="checkbox"
+                disabled={!form.allowSelfSignupInstitutes}
+                checked={Boolean(form.autoApproveInstituteRegistrations)}
+                onChange={(e) =>
+                  setForm({ ...form, autoApproveInstituteRegistrations: e.target.checked })
+                }
+                className="mt-0.5 rounded border-slate-300 text-blue-700 focus:ring-blue-700"
+              />
+              <div>
+                <p className="text-xs font-semibold text-slate-900">
+                  Automatically Approve &amp; Provision Public Institute Registrations (Instant SaaS Onboarding)
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  When OFF (Recommended), applications enter the Super Admin Approval Queue under All Institutes. When ON, new institutes are provisioned immediately with an isolated tenant workspace and active Free Trial or selected plan.
                 </p>
               </div>
             </label>
@@ -576,7 +616,14 @@ export function GlobalSettingsView() {
 // SECTION 10: NOTIFICATION MANAGEMENT (INTEGRATION STATUS & RENEWAL NOTICES)
 // ============================================================================
 export function NotificationManagementView() {
-  const { profile, platformRole, tenants, platformSubscriptions, pushToast } = usePortal();
+  const {
+    profile,
+    platformRole,
+    tenants,
+    platformSubscriptions,
+    platformAnnouncements,
+    pushToast,
+  } = usePortal();
 
   const [selectedTenantId, setSelectedTenantId] = useState<string>(
     tenants.find((t) => !t.isDefaultPlatformTenant)?.tenantId || tenants[0]?.tenantId || ''
@@ -585,6 +632,42 @@ export function NotificationManagementView() {
     'Important notice from ZACMA Platform Operations: Please review your upcoming subscription renewal date and verify your institute billing settings to ensure uninterrupted portal access.'
   );
   const [sending, setSending] = useState(false);
+
+  // Platform-Wide Announcements Publisher State
+  const [annTitle, setAnnTitle] = useState('');
+  const [annMessage, setAnnMessage] = useState('');
+  const [annSeverity, setAnnSeverity] = useState<PlatformAnnouncement['severity']>('INFO');
+  const [annAudience, setAnnAudience] = useState<PlatformAnnouncement['targetAudience']>('ALL_INSTITUTES');
+  const [annTargetTenantId, setAnnTargetTenantId] = useState('');
+  const [annExpiresAt, setAnnExpiresAt] = useState('');
+  const [publishingAnn, setPublishingAnn] = useState(false);
+
+  const handlePublishAnnouncement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profile || !platformRole || !annTitle.trim() || !annMessage.trim()) return;
+    setPublishingAnn(true);
+    try {
+      await publishPlatformAnnouncement(
+        {
+          title: annTitle,
+          message: annMessage,
+          severity: annSeverity,
+          targetAudience: annAudience,
+          targetTenantId: annAudience === 'SPECIFIC_TENANT' ? annTargetTenantId : undefined,
+          expiresAt: annExpiresAt || undefined,
+        },
+        { uid: profile.uid, fullName: profile.fullName, role: profile.role, platformRole }
+      );
+      setAnnTitle('');
+      setAnnMessage('');
+      setAnnExpiresAt('');
+      pushToast('success', 'Platform-wide announcement banner published to target institutes.');
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to publish announcement.');
+    } finally {
+      setPublishingAnn(false);
+    }
+  };
 
   const handleDispatchNotice = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -615,11 +698,184 @@ export function NotificationManagementView() {
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-display font-bold text-slate-900">
-          Notification &amp; Gateway Management
+          Platform Announcements, Notifications &amp; Gateways
         </h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          Monitor per-institute Email, SMS, and WhatsApp channel readiness without exposing private gateway credentials, and dispatch official platform notices.
+          Broadcast live platform-wide banners to training institutes, dispatch direct subscription reminders, and audit gateway status.
         </p>
+      </div>
+
+      {/* Platform-Wide Announcement Banner Manager */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-5">
+        <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+          <Megaphone className="w-4 h-4 text-[#172DEB]" />
+          <h3 className="text-sm font-display font-bold text-slate-900">
+            Broadcast Platform-Wide Announcement Banner
+          </h3>
+        </div>
+        <form onSubmit={(e) => void handlePublishAnnouncement(e)} className="space-y-3.5">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="md:col-span-2">
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Announcement Title *
+              </label>
+              <input
+                type="text"
+                required
+                value={annTitle}
+                onChange={(e) => setAnnTitle(e.target.value)}
+                placeholder="e.g., Scheduled Maintenance Window or New Chapa Feature"
+                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Severity</label>
+              <select
+                value={annSeverity}
+                onChange={(e) => setAnnSeverity(e.target.value as PlatformAnnouncement['severity'])}
+                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white"
+              >
+                <option value="INFO">Info (ZACMA Blue)</option>
+                <option value="SUCCESS">Success / Release (Emerald)</option>
+                <option value="WARNING">Warning / Maintenance (Amber)</option>
+                <option value="CRITICAL">Critical Alert (Red)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Expires On (Optional)
+              </label>
+              <input
+                type="date"
+                value={annExpiresAt}
+                onChange={(e) => setAnnExpiresAt(e.target.value)}
+                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Target Audience
+              </label>
+              <select
+                value={annAudience}
+                onChange={(e) =>
+                  setAnnAudience(e.target.value as PlatformAnnouncement['targetAudience'])
+                }
+                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white"
+              >
+                <option value="ALL_INSTITUTES">All Registered Institutes</option>
+                <option value="TRIAL_INSTITUTES">Free Trial Institutes Only</option>
+                <option value="ACTIVE_INSTITUTES">Active Paid Institutes Only</option>
+                <option value="SPECIFIC_TENANT">Specific Institute</option>
+              </select>
+            </div>
+            {annAudience === 'SPECIFIC_TENANT' && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Select Target Institute
+                </label>
+                <select
+                  required
+                  value={annTargetTenantId}
+                  onChange={(e) => setAnnTargetTenantId(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white"
+                >
+                  <option value="">Choose institute...</option>
+                  {tenants.map((t) => (
+                    <option key={t.tenantId} value={t.tenantId}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className={annAudience === 'SPECIFIC_TENANT' ? '' : 'md:col-span-2'}>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Banner Message *
+              </label>
+              <input
+                type="text"
+                required
+                value={annMessage}
+                onChange={(e) => setAnnMessage(e.target.value)}
+                placeholder="Displayed across the top of target institute dashboards..."
+                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={publishingAnn}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-[#172DEB] hover:bg-blue-800 text-white text-xs font-semibold rounded-lg disabled:opacity-50 cursor-pointer"
+            >
+              <Megaphone className="w-3.5 h-3.5" />
+              <span>{publishingAnn ? 'Publishing...' : 'Publish Platform Banner'}</span>
+            </button>
+          </div>
+        </form>
+
+        {platformAnnouncements.length > 0 && (
+          <div className="pt-3 border-t border-slate-100 space-y-2">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+              Published Announcements ({platformAnnouncements.length})
+            </p>
+            <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+              {platformAnnouncements.map((ann) => (
+                <div
+                  key={ann.id}
+                  className="p-3 flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          ann.severity === 'CRITICAL'
+                            ? 'bg-red-100 text-red-700'
+                            : ann.severity === 'WARNING'
+                            ? 'bg-amber-100 text-amber-800'
+                            : ann.severity === 'SUCCESS'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-blue-100 text-[#172DEB]'
+                        }`}
+                      >
+                        {ann.severity}
+                      </span>
+                      <p className="font-bold text-slate-900 truncate">{ann.title}</p>
+                      <span className="text-[10px] text-slate-500">({ann.targetAudience})</span>
+                    </div>
+                    <p className="text-slate-600 mt-0.5">{ann.message}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => void togglePlatformAnnouncement(ann, !ann.isActive)}
+                      className={`px-2.5 py-1 rounded text-[11px] font-semibold cursor-pointer ${
+                        ann.isActive
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-slate-100 text-slate-600 border border-slate-200'
+                      }`}
+                    >
+                      {ann.isActive ? 'Live' : 'Paused'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void deletePlatformAnnouncement(ann.id)}
+                      className="p-1.5 text-slate-400 hover:text-red-600 rounded cursor-pointer"
+                      aria-label="Delete announcement"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Dispatch Official Platform Notice */}

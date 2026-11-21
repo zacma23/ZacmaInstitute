@@ -47,15 +47,19 @@ import {
   AttendanceRecord,
   AuditLog,
   ChapaTransaction,
+  ClassBatch,
   CommunicationPolicy,
   Conversation,
   Course,
+  Department,
   DirectoryUser,
   Enrollment,
   Expense,
   ExpenseCategory,
   FinancialAdjustment,
   IdentityDocumentRecord,
+  InstituteDocument,
+  InstituteRegistrationRequest,
   LoginHistoryRecord,
   NavSection,
   NotificationChannelRule,
@@ -63,6 +67,7 @@ import {
   Payment,
   PaymentInstallment,
   PaymentPlan,
+  PlatformAnnouncement,
   PlatformGlobalSettings,
   PlatformInvoice,
   PlatformPayment,
@@ -142,6 +147,10 @@ interface PortalContextValue {
   endSupportAccess: () => Promise<void>;
   platformSettings: PlatformGlobalSettings;
   supportTickets: SupportTicket[];
+  registrationRequests: InstituteRegistrationRequest[];
+  platformAnnouncements: PlatformAnnouncement[];
+  detectedInstituteSlug: string | null;
+  refreshProfile: () => Promise<void>;
   isModuleEnabled: (moduleCode: SaasModuleCode) => boolean;
   canWriteInTenant: boolean;
   actorContext: ActorContext | null;
@@ -166,6 +175,9 @@ interface PortalContextValue {
   staffCompensations: StaffCompensation[];
   identityDocuments: IdentityDocumentRecord[];
   courses: Course[];
+  departments: Department[];
+  classBatches: ClassBatch[];
+  instituteDocuments: InstituteDocument[];
   paymentPlans: PaymentPlan[];
   students: Student[];
   enrollments: Enrollment[];
@@ -227,7 +239,15 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [activeSupportSession, setActiveSupportSession] = useState<SupportAccessSession | null>(null);
   const [platformSettings, setPlatformSettings] = useState<PlatformGlobalSettings>(DEFAULT_PLATFORM_SETTINGS);
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
+  const [registrationRequests, setRegistrationRequests] = useState<InstituteRegistrationRequest[]>([]);
+  const [platformAnnouncements, setPlatformAnnouncements] = useState<PlatformAnnouncement[]>([]);
   const legacyMigrationCheckedRef = useRef(false);
+
+  const detectedInstituteSlug = useMemo<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const match = window.location.pathname.match(/^\/institute\/([a-z0-9-]+)/i);
+    return match ? match[1].toLowerCase() : null;
+  }, []);
 
   const [roles, setRoles] = useState<RoleRecord[]>([]);
   const [staffProfiles, setStaffProfiles] = useState<StaffProfile[]>([]);
@@ -235,6 +255,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [staffCompensations, setStaffCompensations] = useState<StaffCompensation[]>([]);
   const [identityDocuments, setIdentityDocuments] = useState<IdentityDocumentRecord[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [classBatches, setClassBatches] = useState<ClassBatch[]>([]);
+  const [instituteDocuments, setInstituteDocuments] = useState<InstituteDocument[]>([]);
   const [paymentPlans, setPaymentPlans] = useState<PaymentPlan[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
@@ -530,6 +553,100 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     return () => unsubscribe();
   }, []);
 
+  // Real-time listener on own profile doc so auto-approved or Super-Admin-approved institute signups
+  // immediately promote tenantId & role without requiring a manual logout/login.
+  useEffect(() => {
+    if (!user) return;
+    const isBootstrap =
+      user.emailVerified && (user.email || '').toLowerCase() === BOOTSTRAP_ADMIN_EMAIL;
+    const unsub = onSnapshot(
+      doc(db, 'profiles', user.uid),
+      (snap) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        const now = new Date().toISOString();
+        setProfile((prev) => {
+          const nextTenantId = (d.tenantId as string | undefined) || DEFAULT_ZACMA_TENANT_ID;
+          const nextRole: RoleCode = isBootstrap ? 'ADMIN' : (d.role as RoleCode);
+          const nextPlatformRole: PlatformRole | undefined = isBootstrap
+            ? 'SUPER_ADMIN'
+            : (d.platformRole as PlatformRole | undefined) || undefined;
+          if (
+            prev &&
+            prev.tenantId === nextTenantId &&
+            prev.role === nextRole &&
+            prev.platformRole === nextPlatformRole &&
+            prev.fullName === (d.fullName || prev.fullName) &&
+            prev.isActive === (d.isActive ?? true) &&
+            prev.linkedStudentId === d.linkedStudentId
+          ) {
+            return prev;
+          }
+          return {
+            id: snap.id,
+            uid: d.uid || user.uid,
+            tenantId: nextTenantId,
+            platformRole: nextPlatformRole,
+            inviteId: d.inviteId,
+            email: d.email || user.email || '',
+            fullName: d.fullName || user.displayName || 'ZACMA User',
+            phone: d.phone,
+            role: nextRole,
+            linkedStudentId: d.linkedStudentId,
+            allowedModules: Array.isArray(d.allowedModules)
+              ? (d.allowedModules as NavSection[])
+              : undefined,
+            canExportReports: typeof d.canExportReports === 'boolean' ? d.canExportReports : undefined,
+            lastLoginAt: d.lastLoginAt,
+            isActive: d.isActive ?? true,
+            createdAt: d.createdAt || now,
+            updatedAt: d.updatedAt || now,
+          };
+        });
+      },
+      () => {
+        // Non-fatal fallback
+      }
+    );
+    return () => unsub();
+  }, [user]);
+
+  const refreshProfile = useCallback(async () => {
+    if (!user) return;
+    try {
+      const snap = await getDoc(doc(db, 'profiles', user.uid));
+      if (!snap.exists()) return;
+      const d = snap.data();
+      const now = new Date().toISOString();
+      const isBootstrap =
+        user.emailVerified && (user.email || '').toLowerCase() === BOOTSTRAP_ADMIN_EMAIL;
+      setProfile({
+        id: snap.id,
+        uid: d.uid || user.uid,
+        tenantId: (d.tenantId as string | undefined) || DEFAULT_ZACMA_TENANT_ID,
+        platformRole: isBootstrap
+          ? 'SUPER_ADMIN'
+          : (d.platformRole as PlatformRole | undefined) || undefined,
+        inviteId: d.inviteId,
+        email: d.email || user.email || '',
+        fullName: d.fullName || user.displayName || 'ZACMA User',
+        phone: d.phone,
+        role: isBootstrap ? 'ADMIN' : (d.role as RoleCode),
+        linkedStudentId: d.linkedStudentId,
+        allowedModules: Array.isArray(d.allowedModules)
+          ? (d.allowedModules as NavSection[])
+          : undefined,
+        canExportReports: typeof d.canExportReports === 'boolean' ? d.canExportReports : undefined,
+        lastLoginAt: d.lastLoginAt,
+        isActive: d.isActive ?? true,
+        createdAt: d.createdAt || now,
+        updatedAt: d.updatedAt || now,
+      });
+    } catch {
+      // Ignore transient refresh error
+    }
+  }, [user]);
+
   const platformRole: PlatformRole | null = profile?.platformRole ?? null;
   const isPlatformUser = Boolean(platformRole);
   const actualRole: RoleCode | null = profile?.role ?? null;
@@ -660,6 +777,19 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     };
 
     // Multi-Tenant SaaS Platform Subscriptions
+    const platSetUnsub = onSnapshot(
+      doc(db, 'platform_settings', 'default'),
+      (snap) => {
+        if (snap.exists()) {
+          setPlatformSettings({ id: snap.id, ...snap.data() } as PlatformGlobalSettings);
+        } else {
+          setPlatformSettings(DEFAULT_PLATFORM_SETTINGS);
+        }
+      },
+      () => setPlatformSettings(DEFAULT_PLATFORM_SETTINGS)
+    );
+    unsubs.push(platSetUnsub);
+
     if (isPlatformUser) {
       subscribe<TenantRecord>('tenants', setTenants, (a, b) => b.createdAt.localeCompare(a.createdAt), true);
       subscribe<SubscriptionPlan>('subscription_plans', setSubscriptionPlans, (a, b) => a.monthlyPriceEtb - b.monthlyPriceEtb, true);
@@ -669,19 +799,18 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       subscribe<TenantInvitation>('tenant_invitations', setTenantInvitations, (a, b) => b.createdAt.localeCompare(a.createdAt), true);
       subscribe<SupportAccessSession>('support_access_sessions', setSupportSessions, (a, b) => b.startedAt.localeCompare(a.startedAt), true);
       subscribe<SupportTicket>('support_tickets', setSupportTickets, (a, b) => b.createdAt.localeCompare(a.createdAt), true);
-
-      const platSetUnsub = onSnapshot(
-        doc(db, 'platform_settings', 'default'),
-        (snap) => {
-          if (snap.exists()) {
-            setPlatformSettings({ id: snap.id, ...snap.data() } as PlatformGlobalSettings);
-          } else {
-            setPlatformSettings(DEFAULT_PLATFORM_SETTINGS);
-          }
-        },
-        () => setPlatformSettings(DEFAULT_PLATFORM_SETTINGS)
+      subscribe<InstituteRegistrationRequest>(
+        'institute_registration_requests',
+        setRegistrationRequests,
+        (a, b) => b.createdAt.localeCompare(a.createdAt),
+        true
       );
-      unsubs.push(platSetUnsub);
+      subscribe<PlatformAnnouncement>(
+        'platform_announcements',
+        setPlatformAnnouncements,
+        (a, b) => b.createdAt.localeCompare(a.createdAt),
+        true
+      );
     } else {
       // Institute user: subscribe strictly to their own tenant doc, plans catalog, and tenant-scoped subscription/invoices/tickets
       const myTenantUnsub = onSnapshot(
@@ -698,6 +827,34 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       unsubs.push(myTenantUnsub);
 
       subscribe<SubscriptionPlan>('subscription_plans', setSubscriptionPlans, (a, b) => a.monthlyPriceEtb - b.monthlyPriceEtb, true);
+
+      // Own institute registration requests (so pending applicants see live review status)
+      const ownReqUnsub = onSnapshot(
+        query(collection(db, 'institute_registration_requests'), where('applicantUid', '==', user.uid)),
+        (snapshot) => {
+          const rows = snapshot.docs.map(
+            (d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }) as InstituteRegistrationRequest
+          );
+          rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          setRegistrationRequests(rows);
+        },
+        () => setRegistrationRequests([])
+      );
+      unsubs.push(ownReqUnsub);
+
+      // Active platform-wide announcements
+      const annUnsub = onSnapshot(
+        query(collection(db, 'platform_announcements'), where('isActive', '==', true)),
+        (snapshot) => {
+          const rows = snapshot.docs.map(
+            (d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }) as PlatformAnnouncement
+          );
+          rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          setPlatformAnnouncements(rows);
+        },
+        () => setPlatformAnnouncements([])
+      );
+      unsubs.push(annUnsub);
 
       if (actualRole === 'ADMIN' || actualRole === 'MANAGER' || actualRole === 'ACCOUNTANT') {
         subscribe<PlatformSubscription>('platform_subscriptions', setPlatformSubscriptions, (a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -931,6 +1088,24 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     if (actualRole === 'STUDENT') {
       const linkedId = profile.linkedStudentId;
       subscribe<Course>('courses', setCourses, (a, b) => a.name.localeCompare(b.name));
+      subscribe<Department>('departments', setDepartments, (a, b) => a.name.localeCompare(b.name));
+      subscribe<ClassBatch>('class_batches', setClassBatches, (a, b) => b.startDate.localeCompare(a.startDate));
+      const studentDocUnsub = onSnapshot(
+        query(
+          collection(db, 'institute_documents'),
+          where('tenantId', '==', userTenantId),
+          where('visibility', '==', 'STUDENTS_AND_STAFF')
+        ),
+        (snapshot) => {
+          const rows = snapshot.docs.map(
+            (d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }) as InstituteDocument
+          );
+          rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          setInstituteDocuments(rows);
+        },
+        () => setInstituteDocuments([])
+      );
+      unsubs.push(studentDocUnsub);
       setRoles([]);
       setPaymentPlans([]);
       setExpenseCategories([]);
@@ -1056,6 +1231,32 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     // Core staff collections (readable by Admin, Manager, Accountant, Instructor, Receptionist, HR Officer, General Staff)
     subscribe<RoleRecord>('roles', setRoles, undefined, true);
     subscribe<Course>('courses', setCourses, (a, b) => a.name.localeCompare(b.name));
+    subscribe<Department>('departments', setDepartments, (a, b) => a.name.localeCompare(b.name));
+    subscribe<ClassBatch>('class_batches', setClassBatches, (a, b) => b.startDate.localeCompare(a.startDate));
+
+    // Tenant-scoped Institutional Documents with strict visibility filtering matching firestore.rules
+    const instDocsQuery = isPlatformUser
+      ? collection(db, 'institute_documents')
+      : actualRole === 'ADMIN' || actualRole === 'MANAGER'
+      ? query(collection(db, 'institute_documents'), where('tenantId', '==', userTenantId))
+      : query(
+          collection(db, 'institute_documents'),
+          where('tenantId', '==', userTenantId),
+          where('visibility', 'in', ['ALL_STAFF', 'STUDENTS_AND_STAFF'])
+        );
+    const instDocsUnsub = onSnapshot(
+      instDocsQuery,
+      (snapshot) => {
+        const rows = snapshot.docs.map(
+          (d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }) as InstituteDocument
+        );
+        rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setInstituteDocuments(rows);
+      },
+      () => setInstituteDocuments([])
+    );
+    unsubs.push(instDocsUnsub);
+
     subscribe<Student>('students', setStudents, (a, b) =>
       b.studentCode.localeCompare(a.studentCode)
     );
@@ -1258,6 +1459,12 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const scopedStaffCompensations = useMemo(() => staffCompensations.filter(belongsToActiveTenant), [staffCompensations, belongsToActiveTenant]);
   const scopedIdentityDocuments = useMemo(() => identityDocuments.filter(belongsToActiveTenant), [identityDocuments, belongsToActiveTenant]);
   const scopedCourses = useMemo(() => courses.filter(belongsToActiveTenant), [courses, belongsToActiveTenant]);
+  const scopedDepartments = useMemo(() => departments.filter(belongsToActiveTenant), [departments, belongsToActiveTenant]);
+  const scopedClassBatches = useMemo(() => classBatches.filter(belongsToActiveTenant), [classBatches, belongsToActiveTenant]);
+  const scopedInstituteDocuments = useMemo(
+    () => instituteDocuments.filter(belongsToActiveTenant),
+    [instituteDocuments, belongsToActiveTenant]
+  );
   const scopedPaymentPlans = useMemo(() => paymentPlans.filter(belongsToActiveTenant), [paymentPlans, belongsToActiveTenant]);
   const scopedStudents = useMemo(() => students.filter(belongsToActiveTenant), [students, belongsToActiveTenant]);
   const scopedEnrollments = useMemo(() => enrollments.filter(belongsToActiveTenant), [enrollments, belongsToActiveTenant]);
@@ -2053,6 +2260,10 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         endSupportAccess,
         platformSettings,
         supportTickets,
+        registrationRequests,
+        platformAnnouncements,
+        detectedInstituteSlug,
+        refreshProfile,
         isModuleEnabled,
         canWriteInTenant,
         actorContext,
@@ -2075,6 +2286,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         staffCompensations: scopedStaffCompensations,
         identityDocuments: scopedIdentityDocuments,
         courses: scopedCourses,
+        departments: scopedDepartments,
+        classBatches: scopedClassBatches,
+        instituteDocuments: scopedInstituteDocuments,
         paymentPlans: scopedPaymentPlans,
         students: scopedStudents,
         enrollments: scopedEnrollments,

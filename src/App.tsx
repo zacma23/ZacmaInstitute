@@ -18,14 +18,17 @@ import {
   Database,
   FileSpreadsheet,
   FileText,
+  FolderOpen,
   Globe,
   History,
   LayoutDashboard,
   Lock,
   LogOut,
+  Megaphone,
   Menu,
   MessageSquare,
   Palette,
+  RefreshCw,
   ScanLine,
   ShieldCheck,
   Smartphone,
@@ -64,6 +67,7 @@ import { StudentPortalView } from './modules/StudentPortalView';
 import { MessagingView } from './modules/MessagingView';
 import { CommunicationsAdminView } from './modules/CommunicationsAdminView';
 import { InstituteSettingsView } from './modules/InstituteSettingsView';
+import { DocumentsView } from './modules/DocumentsView';
 import { SuperAdminShell } from './modules/superadmin/SuperAdminShell';
 import { markNotificationRead } from './lib/zacmaService';
 import { markAllNotificationsRead } from './lib/communicationService';
@@ -108,6 +112,9 @@ function PortalShell() {
     activeTenantId,
     activeSupportSession,
     endSupportAccess,
+    platformAnnouncements,
+    registrationRequests,
+    refreshProfile,
     students,
     staffRecords,
     installments,
@@ -120,7 +127,14 @@ function PortalShell() {
     dismissToast,
   } = usePortal();
 
-  const [activeTab, setActiveTab] = useState<NavSection>('dashboard');
+  const [activeTab, setActiveTab] = useState<NavSection>(() => {
+    if (typeof window !== 'undefined' && window.location.search.includes('chapa_sub_tx_ref=')) {
+      return 'branding';
+    }
+    return 'dashboard';
+  });
+  const [dismissedAnnIds, setDismissedAnnIds] = useState<string[]>([]);
+  const [checkingApproval, setCheckingApproval] = useState(false);
   const [pendingAiPrompt, setPendingAiPrompt] = useState<string | null>(null);
   const [reportStatusFilter, setReportStatusFilter] = useState<'ALL' | StudentPaymentCategory>('ALL');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -210,9 +224,15 @@ function PortalShell() {
       },
       {
         id: 'courses',
-        label: 'Courses',
+        label: 'Courses & Classes',
         icon: <BookOpen className="w-4 h-4" />,
         roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT', 'INSTRUCTOR', 'RECEPTIONIST', 'GENERAL_STAFF'],
+      },
+      {
+        id: 'documents',
+        label: 'Documents Library',
+        icon: <FolderOpen className="w-4 h-4" />,
+        roles: ['ADMIN', 'MANAGER', 'ACCOUNTANT', 'INSTRUCTOR', 'RECEPTIONIST', 'HR_OFFICER', 'GENERAL_STAFF'],
       },
       {
         id: 'payments',
@@ -399,6 +419,100 @@ function PortalShell() {
     );
   }
 
+  // Pending or Rejected Public Institute Registration Gate (prevents applicant from entering zacma_default before Super Admin approves)
+  const latestOwnRegistration =
+    !isPlatformUser &&
+    user &&
+    (profile?.tenantId || DEFAULT_ZACMA_TENANT_ID) === DEFAULT_ZACMA_TENANT_ID &&
+    actualRole === 'INSTRUCTOR'
+      ? registrationRequests.find(
+          (r) => r.applicantUid === user.uid && (r.status === 'PENDING' || r.status === 'REJECTED')
+        ) || null
+      : null;
+
+  if (latestOwnRegistration) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="max-w-lg w-full bg-white border border-slate-200 rounded-2xl shadow-lg overflow-hidden">
+          <div className="h-1.5 w-full zacma-brand-stripe" />
+          <div className="p-8 space-y-5">
+            <div className="flex items-center justify-between">
+              <ZacmaLogo variant="lockup" theme="light" size="sm" subtitle="ZIMS Onboarding Status" />
+              <span
+                className={`px-2.5 py-1 rounded text-[10px] font-bold uppercase ${
+                  latestOwnRegistration.status === 'REJECTED'
+                    ? 'bg-red-50 text-[#E51B23]'
+                    : 'bg-amber-50 text-amber-800'
+                }`}
+              >
+                {latestOwnRegistration.status === 'REJECTED' ? 'Application Declined' : 'Pending Approval'}
+              </span>
+            </div>
+
+            <div>
+              <h1 className="text-xl font-display font-bold text-slate-900">
+                {latestOwnRegistration.status === 'REJECTED'
+                  ? `Registration Declined — ${latestOwnRegistration.instituteName}`
+                  : `Awaiting Super Admin Approval — ${latestOwnRegistration.instituteName}`}
+              </h1>
+              <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
+                {latestOwnRegistration.status === 'REJECTED'
+                  ? latestOwnRegistration.rejectionReason ||
+                    'Your institute registration request was declined by ZACMA Platform Administration.'
+                  : 'Your dedicated training institute workspace has been queued for verification by the ZACMA Super Admin. The moment your application is approved, this screen will automatically transition into your private Institute Admin dashboard.'}
+              </p>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2 text-xs">
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-500">Institute Portal Slug</span>
+                <span className="font-mono font-semibold text-[#172DEB]">
+                  /institute/{latestOwnRegistration.slug}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-500">Selected Plan</span>
+                <span className="font-semibold text-slate-900">
+                  {latestOwnRegistration.selectedPlanName} ({latestOwnRegistration.billingCycle})
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-500">Admin Account</span>
+                <span className="font-mono text-slate-800">{latestOwnRegistration.adminEmail}</span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+              <button
+                type="button"
+                disabled={checkingApproval}
+                onClick={async () => {
+                  setCheckingApproval(true);
+                  await refreshProfile();
+                  setCheckingApproval(false);
+                  pushToast('info', 'Checked latest approval status.');
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#172DEB] hover:bg-blue-800 rounded-lg cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${checkingApproval ? 'animate-spin' : ''}`} />
+                <span>Check Approval Status</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void signOutUser()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+      </div>
+    );
+  }
+
   // Strictly isolated Student Self-Service Portal (completely separate from employee sidebar & dashboards)
   if (effectiveRole === 'STUDENT') {
     return (
@@ -411,6 +525,16 @@ function PortalShell() {
       </>
     );
   }
+
+  const visibleAnnouncements = platformAnnouncements.filter((ann) => {
+    if (!ann.isActive || dismissedAnnIds.includes(ann.id)) return false;
+    if (ann.expiresAt && ann.expiresAt < todayIsoDate()) return false;
+    if (ann.targetAudience === 'ALL_INSTITUTES') return true;
+    if (ann.targetAudience === 'TRIAL_INSTITUTES') return activeTenant?.status === 'TRIAL';
+    if (ann.targetAudience === 'ACTIVE_INSTITUTES') return activeTenant?.status === 'ACTIVE';
+    if (ann.targetAudience === 'SPECIFIC_TENANT') return ann.targetTenantId === activeTenantId;
+    return false;
+  });
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
   const currentNav = navItems.find((n) => n.id === activeTab);
@@ -619,6 +743,43 @@ function PortalShell() {
           </div>
         )}
 
+        {/* Platform-Wide Super Admin Announcements Banner */}
+        {visibleAnnouncements.length > 0 && (
+          <div className="no-print divide-y divide-white/15">
+            {visibleAnnouncements.slice(0, 2).map((ann) => {
+              const barStyle =
+                ann.severity === 'CRITICAL'
+                  ? 'bg-[#E51B23] text-white'
+                  : ann.severity === 'WARNING'
+                  ? 'bg-amber-500 text-slate-950'
+                  : ann.severity === 'SUCCESS'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-[#172DEB] text-white';
+              return (
+                <div
+                  key={ann.id}
+                  className={`${barStyle} px-4 sm:px-6 py-2 flex items-center justify-between gap-3 text-xs`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Megaphone className="w-3.5 h-3.5 shrink-0" />
+                    <p className="truncate">
+                      <strong>{ann.title}:</strong> {ann.message}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDismissedAnnIds((prev) => [...prev, ann.id])}
+                    className="p-1 opacity-80 hover:opacity-100 shrink-0 cursor-pointer"
+                    aria-label="Dismiss announcement"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Suspended Tenant Read-Only Lock Banner */}
         {activeTenant?.status === 'SUSPENDED' && (
           <div className="bg-red-600 text-white px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs no-print">
@@ -797,6 +958,7 @@ function PortalShell() {
                 <StudentsView onOpenAiRegistration={() => setActiveTab('registrations')} />
               )}
               {activeTab === 'courses' && <CoursesView />}
+              {activeTab === 'documents' && <DocumentsView />}
               {activeTab === 'payments' && <PaymentsView onOpenReceipt={setActiveReceipt} />}
               {activeTab === 'chapa' && (
                 <ChapaPaymentsView

@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -13,8 +14,15 @@ import {
   addDaysIso,
   AuditLog,
   BillingCycle,
+  ClassBatch,
+  ClassBatchStatus,
+  Department,
+  InstituteDocument,
+  InstituteDocumentCategory,
+  InstituteRegistrationRequest,
   NavSection,
   PaymentMethod,
+  PlatformAnnouncement,
   PlatformGlobalSettings,
   PlatformInvoice,
   PlatformPayment,
@@ -163,8 +171,9 @@ export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
     id: 'plan_free_trial',
     code: 'FREE_TRIAL',
     name: 'Free Trial (14 Days)',
-    tagline: 'Evaluate the full ZACMA training institute portal with zero commitment.',
+    tagline: 'Evaluate the full ZACMA ZIMS training institute portal with zero commitment.',
     monthlyPriceEtb: 0,
+    quarterlyPriceEtb: 0,
     annualPriceEtb: 0,
     trialDays: 14,
     studentLimit: 50,
@@ -188,8 +197,9 @@ export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
     id: 'plan_basic',
     code: 'BASIC',
     name: 'Basic Institute',
-    tagline: 'Essential student management, course scheduling, and fee receipts.',
+    tagline: 'Essential student management, departments, courses, and fee receipts.',
     monthlyPriceEtb: 4500,
+    quarterlyPriceEtb: 12000,
     annualPriceEtb: 45000,
     trialDays: 14,
     studentLimit: 250,
@@ -214,6 +224,7 @@ export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
     name: 'Professional Institute',
     tagline: 'Full accounting, Chapa online fees, AI ID OCR scanning, and SMS alerts.',
     monthlyPriceEtb: 9500,
+    quarterlyPriceEtb: 25500,
     annualPriceEtb: 95000,
     trialDays: 14,
     studentLimit: 1000,
@@ -244,6 +255,7 @@ export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
     name: 'Enterprise Campus',
     tagline: 'Unlimited scale, custom branding, full AI suite, HR, and priority SLA.',
     monthlyPriceEtb: 18500,
+    quarterlyPriceEtb: 49500,
     annualPriceEtb: 185000,
     trialDays: 30,
     studentLimit: 10000,
@@ -258,7 +270,7 @@ export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
 
 export const DEFAULT_PLATFORM_SETTINGS: PlatformGlobalSettings = {
   id: 'default',
-  platformName: 'ZACMA Technology SaaS Platform',
+  platformName: 'ZACMA Institute Management System (ZIMS)',
   supportEmail: 'support@zacmatech.com',
   supportPhone: '+251 911 000 000',
   defaultCurrency: 'ETB',
@@ -266,7 +278,8 @@ export const DEFAULT_PLATFORM_SETTINGS: PlatformGlobalSettings = {
   defaultTrialDays: 14,
   gracePeriodDays: 7,
   autoSuspendExpiredDays: 14,
-  allowSelfSignupInstitutes: false,
+  allowSelfSignupInstitutes: true,
+  autoApproveInstituteRegistrations: false,
   enforceSupportSessionReason: true,
   maxSupportSessionMinutes: 60,
   defaultAiModel: 'gemini-4-hydrogen',
@@ -303,7 +316,8 @@ export function isNavSectionAllowedByModules(
         set.has('STAFF_MANAGEMENT')
       );
     case 'courses':
-      return set.has('COURSE_MANAGEMENT');
+    case 'documents':
+      return set.has('COURSE_MANAGEMENT') || set.has('STUDENT_MANAGEMENT');
     case 'payments':
     case 'chapa':
     case 'reminders':
@@ -436,11 +450,11 @@ export async function ensurePlatformBootstrapped(actor: PlatformActor): Promise<
         city: 'Addis Ababa',
         address: 'Bole Sub-City, Addis Ababa, Ethiopia',
         website: 'https://zacmatech.com',
-        primaryColor: '#0B2545',
-        secondaryColor: '#D97706',
-        studentIdPrefix: 'ZAC-STU',
-        staffIdPrefix: 'ZAC-STA',
-        receiptPrefix: 'RCP',
+        primaryColor: '#172DEB',
+        secondaryColor: '#E51B23',
+        studentIdPrefix: 'ZAC',
+        staffIdPrefix: 'ZAC',
+        receiptPrefix: 'ZAC-RCP',
         currency: 'ETB',
         timezone: 'Africa/Addis_Ababa',
         academicYear: `${new Date().getFullYear()}/${new Date().getFullYear() + 1}`,
@@ -584,6 +598,7 @@ export interface ProvisionInstituteInput {
   planName: string;
   billingCycle: BillingCycle;
   monthlyPriceEtb: number;
+  quarterlyPriceEtb?: number;
   annualPriceEtb: number;
   subscriptionStartDate: string;
   trialDays: number;
@@ -596,6 +611,7 @@ export interface ProvisionInstituteInput {
   markInitialInvoicePaid?: boolean;
   initialPaymentMethod?: 'Bank Transfer' | 'Chapa' | 'Telebirr' | 'CBE Birr' | 'Cash' | 'Check';
   initialPaymentRef?: string;
+  primaryAdminUid?: string;
 }
 
 export interface ProvisionInstituteResult {
@@ -642,26 +658,28 @@ export async function provisionTrainingInstitute(
       ? 0
       : input.billingCycle === 'ANNUAL'
       ? Number(input.annualPriceEtb || 0)
+      : input.billingCycle === 'QUARTERLY'
+      ? Number(input.quarterlyPriceEtb ?? Math.round(Number(input.monthlyPriceEtb || 0) * 2.7))
       : Number(input.monthlyPriceEtb || 0);
 
   const cleanStuPrefix =
     input.studentIdPrefix
       .trim()
       .toUpperCase()
-      .replace(/[^A-Z0-9-]/g, '')
-      .slice(0, 14) || `${slug.slice(0, 3).toUpperCase()}-STU`;
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 10) || slug.replace(/[^a-z0-9]/g, '').slice(0, 4).toUpperCase() || 'INS';
   const cleanStfPrefix =
     input.staffIdPrefix
       .trim()
       .toUpperCase()
-      .replace(/[^A-Z0-9-]/g, '')
-      .slice(0, 14) || `${slug.slice(0, 3).toUpperCase()}-STA`;
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 10) || cleanStuPrefix;
   const cleanRcpPrefix =
     input.receiptPrefix
       .trim()
       .toUpperCase()
       .replace(/[^A-Z0-9-]/g, '')
-      .slice(0, 14) || `${slug.slice(0, 3).toUpperCase()}-RCP`;
+      .slice(0, 14) || `${cleanStuPrefix}-RCP`;
 
   try {
     const batch = writeBatch(db);
@@ -710,6 +728,9 @@ export async function provisionTrainingInstitute(
       planName: input.planName,
       billingCycle: input.billingCycle,
       monthlyPriceEtb: Number(input.monthlyPriceEtb || 0),
+      quarterlyPriceEtb: Number(
+        input.quarterlyPriceEtb ?? Math.round(Number(input.monthlyPriceEtb || 0) * 2.7)
+      ),
       annualPriceEtb: Number(input.annualPriceEtb || 0),
       studentLimit: Math.max(1, Number(input.studentLimit || 100)),
       staffLimit: Math.max(1, Number(input.staffLimit || 20)),
@@ -718,6 +739,7 @@ export async function provisionTrainingInstitute(
       aiMonthlyQuota: Math.max(0, Number(input.aiMonthlyQuota || 0)),
       aiRequestsUsed: 0,
       enabledModules: input.enabledModules,
+      primaryAdminUid: input.primaryAdminUid,
       primaryAdminName: input.primaryAdminName.trim().slice(0, 120),
       primaryAdminEmail: input.primaryAdminEmail.trim().toLowerCase().slice(0, 160),
       primaryAdminPhone: input.primaryAdminPhone.trim().slice(0, 32),
@@ -840,6 +862,25 @@ export async function provisionTrainingInstitute(
         name: c.name,
         description: c.description,
         isActive: true,
+      });
+    }
+
+    // 4b. Default Academic Departments for the new institute
+    const defaultDepartments = [
+      { code: 'TECH', name: 'Technology & Computing', description: 'Software, IT, and digital skills programs.' },
+      { code: 'BUS', name: 'Business & Management', description: 'Accounting, entrepreneurship, and leadership tracks.' },
+      { code: 'VOC', name: 'Vocational & Technical Trades', description: 'Hands-on engineering and practical certifications.' },
+    ];
+    for (const dept of defaultDepartments) {
+      batch.set(doc(db, 'departments', `${tenantId}_dept_${dept.code.toLowerCase()}`), {
+        tenantId,
+        code: dept.code,
+        name: dept.name,
+        description: dept.description,
+        isActive: true,
+        createdBy: actor.uid,
+        createdAt: now,
+        updatedAt: now,
       });
     }
 
@@ -1064,6 +1105,8 @@ export async function upgradeOrExtendSubscription(
     ? 0
     : input.billingCycle === 'ANNUAL'
     ? input.plan.annualPriceEtb
+    : input.billingCycle === 'QUARTERLY'
+    ? input.plan.quarterlyPriceEtb ?? Math.round(input.plan.monthlyPriceEtb * 2.7)
     : input.plan.monthlyPriceEtb;
 
   try {
@@ -1076,6 +1119,7 @@ export async function upgradeOrExtendSubscription(
       planName: input.plan.name,
       billingCycle: input.billingCycle,
       monthlyPriceEtb: input.plan.monthlyPriceEtb,
+      quarterlyPriceEtb: input.plan.quarterlyPriceEtb ?? Math.round(input.plan.monthlyPriceEtb * 2.7),
       annualPriceEtb: input.plan.annualPriceEtb,
       subscriptionExpiresAt: input.newExpiresAt,
       updatedAt: now,
@@ -1964,3 +2008,950 @@ export function exportPlatformAnalyticsWorkbook(params: {
 
   XLSX.writeFile(wb, `ZACMA_SaaS_Platform_Analytics_${todayIsoDate()}.xlsx`);
 }
+
+// ---------------------------------------------------------------------------
+// Public Institute Self-Registration, Approval Queue & Auto-Provisioning
+// ---------------------------------------------------------------------------
+
+export interface PublicInstituteRegistrationInput {
+  instituteName: string;
+  shortName: string;
+  businessType: string;
+  email: string;
+  phone: string;
+  country: string;
+  city: string;
+  address: string;
+  website?: string;
+  logoUrl?: string;
+  primaryColor?: string;
+  secondaryColor?: string;
+  currency: 'ETB' | 'USD' | 'KES' | 'EUR' | 'GBP';
+  selectedPlan: SubscriptionPlan;
+  billingCycle: BillingCycle;
+  adminFullName: string;
+  adminEmail: string;
+  adminPhone: string;
+  adminPosition: string;
+  applicantUid: string;
+}
+
+export interface PublicInstituteRegistrationResult {
+  requestId: string;
+  slug: string;
+  status: 'PENDING' | 'APPROVED';
+  provisionedTenantId?: string;
+}
+
+export async function submitInstituteRegistrationRequest(
+  input: PublicInstituteRegistrationInput
+): Promise<PublicInstituteRegistrationResult> {
+  const now = new Date().toISOString();
+  const today = todayIsoDate();
+  const requestId = makeId('instreq');
+  const slug = makeSlug(input.shortName || input.instituteName);
+
+  // Check global platform settings for Automatic Approval vs Manual Approval
+  let autoApprove = false;
+  let allowSignup = true;
+  try {
+    const settingsSnap = await getDoc(doc(db, 'platform_settings', 'default'));
+    if (settingsSnap.exists()) {
+      const s = settingsSnap.data() as PlatformGlobalSettings;
+      allowSignup = s.allowSelfSignupInstitutes !== false;
+      autoApprove = Boolean(s.allowSelfSignupInstitutes && s.autoApproveInstituteRegistrations);
+    }
+  } catch {
+    autoApprove = false;
+  }
+
+  if (!allowSignup) {
+    throw new Error('Public institute self-registration is currently paused by ZACMA Platform Administration.');
+  }
+
+  let provisionedTenantId: string | undefined;
+
+  if (autoApprove) {
+    const rand4 = Math.random().toString(36).slice(2, 6);
+    const tenantId = `inst_${slug.replace(/-/g, '_')}_${rand4}`;
+    const subId = `sub_${tenantId}`;
+    const isTrial = input.billingCycle === 'TRIAL' || input.selectedPlan.code === 'FREE_TRIAL';
+    const durationDays = isTrial
+      ? Math.max(7, input.selectedPlan.trialDays || 14)
+      : input.billingCycle === 'ANNUAL'
+      ? 365
+      : input.billingCycle === 'QUARTERLY'
+      ? 90
+      : 30;
+    const expiresAt = addDaysIso(today, durationDays);
+    const prefix = slug.replace(/[^a-z0-9]/g, '').slice(0, 4).toUpperCase() || 'INS';
+    const priceEtb = isTrial
+      ? 0
+      : input.billingCycle === 'ANNUAL'
+      ? input.selectedPlan.annualPriceEtb
+      : input.billingCycle === 'QUARTERLY'
+      ? input.selectedPlan.quarterlyPriceEtb ?? Math.round(input.selectedPlan.monthlyPriceEtb * 2.7)
+      : input.selectedPlan.monthlyPriceEtb;
+
+    const tenantPayload: Omit<TenantRecord, 'id'> = {
+      tenantId,
+      name: input.instituteName.trim().slice(0, 140),
+      shortName: (input.shortName.trim() || input.instituteName.trim().slice(0, 28)).slice(0, 40),
+      slug,
+      businessType: input.businessType.trim().slice(0, 80) || 'Training Institute',
+      email: input.email.trim().toLowerCase().slice(0, 160),
+      phone: input.phone.trim().slice(0, 30),
+      country: input.country.trim().slice(0, 80) || 'Ethiopia',
+      city: input.city.trim().slice(0, 80) || 'Addis Ababa',
+      address: input.address.trim().slice(0, 240) || `${input.city}, ${input.country}`,
+      website: input.website?.trim().slice(0, 200),
+      logoUrl: input.logoUrl?.slice(0, 90000),
+      primaryColor: input.primaryColor || '#172DEB',
+      secondaryColor: input.secondaryColor || '#E51B23',
+      studentIdPrefix: prefix,
+      staffIdPrefix: prefix,
+      receiptPrefix: `${prefix}-RCP`,
+      currency: input.currency || 'ETB',
+      timezone: 'Africa/Addis_Ababa',
+      academicYear: `${new Date().getFullYear()}/${new Date().getFullYear() + 1}`,
+      paymentMethods: ['Cash', 'CBE Birr', 'Telebirr', 'Bank Transfer', 'Chapa'],
+      defaultLanguage: 'English (Ethiopia)',
+      dateFormat: 'GREGORIAN_AND_ETHIOPIAN',
+      invoiceFooterNote: `Official financial document issued by ${input.instituteName.trim()}.`,
+      notificationEmailEnabled: true,
+      notificationSmsEnabled: true,
+      notificationWhatsappEnabled: false,
+      emailGatewayStatus: 'CONFIGURED',
+      smsGatewayStatus: 'CONFIGURED',
+      whatsappGatewayStatus: 'UNCONFIGURED',
+      smsSenderLabel: prefix,
+      status: isTrial ? 'TRIAL' : 'ACTIVE',
+      planId: input.selectedPlan.id,
+      planCode: input.selectedPlan.code,
+      planName: input.selectedPlan.name,
+      billingCycle: input.billingCycle,
+      monthlyPriceEtb: input.selectedPlan.monthlyPriceEtb,
+      quarterlyPriceEtb:
+        input.selectedPlan.quarterlyPriceEtb ?? Math.round(input.selectedPlan.monthlyPriceEtb * 2.7),
+      annualPriceEtb: input.selectedPlan.annualPriceEtb,
+      studentLimit: input.selectedPlan.studentLimit,
+      staffLimit: input.selectedPlan.staffLimit,
+      storageLimitMb: input.selectedPlan.storageLimitMb,
+      storageUsedMb: 0,
+      aiMonthlyQuota: input.selectedPlan.aiMonthlyQuota,
+      aiRequestsUsed: 0,
+      enabledModules: input.selectedPlan.includedModules,
+      primaryAdminUid: input.applicantUid,
+      primaryAdminName: input.adminFullName.trim().slice(0, 120),
+      primaryAdminEmail: input.adminEmail.trim().toLowerCase().slice(0, 160),
+      primaryAdminPhone: input.adminPhone.trim().slice(0, 30),
+      primaryAdminPosition: input.adminPosition.trim().slice(0, 80) || 'Institute Administrator',
+      subscriptionStartDate: today,
+      trialEndsAt: isTrial ? expiresAt : undefined,
+      subscriptionExpiresAt: expiresAt,
+      isDefaultPlatformTenant: false,
+      createdBy: input.applicantUid,
+      createdByName: input.adminFullName.trim().slice(0, 120),
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      // Create tenant first so security rules verify tenant ownership on profile update
+      await setDoc(doc(db, 'tenants', tenantId), cleanObject(tenantPayload));
+
+      const batch = writeBatch(db);
+      batch.set(
+        doc(db, 'platform_subscriptions', subId),
+        cleanObject({
+          tenantId,
+          tenantName: tenantPayload.name,
+          planId: input.selectedPlan.id,
+          planCode: input.selectedPlan.code,
+          planName: input.selectedPlan.name,
+          billingCycle: input.billingCycle,
+          priceEtb,
+          currency: input.currency || 'ETB',
+          status: isTrial ? 'TRIAL' : 'ACTIVE',
+          startDate: today,
+          trialEndsAt: isTrial ? expiresAt : undefined,
+          expiresAt,
+          autoRenew: true,
+          updatedBy: input.applicantUid,
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
+
+      batch.set(
+        doc(db, 'departments', `${tenantId}_dept_tech`),
+        cleanObject({
+          tenantId,
+          code: 'TECH',
+          name: 'Technology & Computing',
+          description: 'Core digital and engineering training programs.',
+          isActive: true,
+          createdBy: input.applicantUid,
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
+
+      batch.set(
+        doc(db, 'institute_registration_requests', requestId),
+        cleanObject({
+          instituteName: tenantPayload.name,
+          shortName: tenantPayload.shortName,
+          slug,
+          businessType: tenantPayload.businessType,
+          email: tenantPayload.email,
+          phone: tenantPayload.phone,
+          country: tenantPayload.country,
+          city: tenantPayload.city,
+          address: tenantPayload.address,
+          website: tenantPayload.website,
+          logoUrl: tenantPayload.logoUrl,
+          primaryColor: tenantPayload.primaryColor,
+          secondaryColor: tenantPayload.secondaryColor,
+          currency: tenantPayload.currency,
+          selectedPlanId: input.selectedPlan.id,
+          selectedPlanCode: input.selectedPlan.code,
+          selectedPlanName: input.selectedPlan.name,
+          billingCycle: input.billingCycle,
+          adminFullName: tenantPayload.primaryAdminName,
+          adminEmail: tenantPayload.primaryAdminEmail,
+          adminPhone: tenantPayload.primaryAdminPhone,
+          adminPosition: tenantPayload.primaryAdminPosition,
+          applicantUid: input.applicantUid,
+          status: 'APPROVED',
+          provisionedTenantId: tenantId,
+          reviewedBy: 'AUTO_APPROVAL',
+          reviewedByName: 'ZIMS Auto-Provisioning Engine',
+          reviewedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
+
+      batch.update(doc(db, 'profiles', input.applicantUid), {
+        tenantId,
+        role: 'ADMIN',
+        fullName: tenantPayload.primaryAdminName,
+        phone: tenantPayload.primaryAdminPhone,
+        updatedAt: now,
+      });
+
+      await batch.commit();
+      provisionedTenantId = tenantId;
+
+      return { requestId, slug, status: 'APPROVED', provisionedTenantId };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `tenants/${tenantId}`);
+    }
+  }
+
+  // Manual Super Admin Approval flow
+  try {
+    const reqDoc: Omit<InstituteRegistrationRequest, 'id'> = {
+      instituteName: input.instituteName.trim().slice(0, 140),
+      shortName: (input.shortName.trim() || input.instituteName.trim().slice(0, 28)).slice(0, 40),
+      slug,
+      businessType: input.businessType.trim().slice(0, 80) || 'Training Institute',
+      email: input.email.trim().toLowerCase().slice(0, 160),
+      phone: input.phone.trim().slice(0, 30),
+      country: input.country.trim().slice(0, 80) || 'Ethiopia',
+      city: input.city.trim().slice(0, 80) || 'Addis Ababa',
+      address: input.address.trim().slice(0, 240) || `${input.city}, ${input.country}`,
+      website: input.website?.trim().slice(0, 200),
+      logoUrl: input.logoUrl?.slice(0, 90000),
+      primaryColor: input.primaryColor || '#172DEB',
+      secondaryColor: input.secondaryColor || '#E51B23',
+      currency: input.currency || 'ETB',
+      selectedPlanId: input.selectedPlan.id,
+      selectedPlanCode: input.selectedPlan.code,
+      selectedPlanName: input.selectedPlan.name,
+      billingCycle: input.billingCycle,
+      adminFullName: input.adminFullName.trim().slice(0, 120),
+      adminEmail: input.adminEmail.trim().toLowerCase().slice(0, 160),
+      adminPhone: input.adminPhone.trim().slice(0, 30),
+      adminPosition: input.adminPosition.trim().slice(0, 80) || 'Institute Administrator',
+      applicantUid: input.applicantUid,
+      status: 'PENDING',
+      createdAt: now,
+      updatedAt: now,
+    };
+    await setDoc(doc(db, 'institute_registration_requests', requestId), cleanObject(reqDoc));
+    return { requestId, slug, status: 'PENDING' };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `institute_registration_requests/${requestId}`);
+  }
+}
+
+export async function approveInstituteRegistrationRequest(
+  request: InstituteRegistrationRequest,
+  plans: SubscriptionPlan[],
+  actor: PlatformActor
+): Promise<ProvisionInstituteResult> {
+  if (actor.platformRole !== 'SUPER_ADMIN' && actor.platformRole !== 'PLATFORM_ADMIN') {
+    throw new Error('Only Platform Administrators can approve institute registrations.');
+  }
+
+  const matchedPlan =
+    plans.find((p) => p.id === request.selectedPlanId || p.code === request.selectedPlanCode) ||
+    DEFAULT_SUBSCRIPTION_PLANS.find((p) => p.code === request.selectedPlanCode) ||
+    DEFAULT_SUBSCRIPTION_PLANS[0];
+
+  const today = todayIsoDate();
+  const isTrial = request.billingCycle === 'TRIAL' || matchedPlan.code === 'FREE_TRIAL';
+  const durationDays = isTrial
+    ? Math.max(7, matchedPlan.trialDays || 14)
+    : request.billingCycle === 'ANNUAL'
+    ? 365
+    : request.billingCycle === 'QUARTERLY'
+    ? 90
+    : 30;
+  const prefix = request.slug.replace(/[^a-z0-9]/g, '').slice(0, 4).toUpperCase() || 'INS';
+
+  const result = await provisionTrainingInstitute(
+    {
+      name: request.instituteName,
+      shortName: request.shortName,
+      businessType: request.businessType,
+      email: request.email,
+      phone: request.phone,
+      country: request.country,
+      city: request.city,
+      address: request.address,
+      website: request.website,
+      logoUrl: request.logoUrl,
+      primaryAdminUid: request.applicantUid,
+      primaryAdminName: request.adminFullName,
+      primaryAdminEmail: request.adminEmail,
+      primaryAdminPhone: request.adminPhone,
+      primaryAdminPosition: request.adminPosition,
+      studentIdPrefix: prefix,
+      staffIdPrefix: prefix,
+      receiptPrefix: `${prefix}-RCP`,
+      currency: request.currency,
+      timezone: 'Africa/Addis_Ababa',
+      academicYear: `${new Date().getFullYear()}/${new Date().getFullYear() + 1}`,
+      paymentMethods: ['Cash', 'CBE Birr', 'Telebirr', 'Bank Transfer', 'Chapa'],
+      defaultLanguage: 'English (Ethiopia)',
+      dateFormat: 'GREGORIAN_AND_ETHIOPIAN',
+      primaryColor: request.primaryColor || '#172DEB',
+      secondaryColor: request.secondaryColor || '#E51B23',
+      notificationEmailEnabled: true,
+      notificationSmsEnabled: true,
+      notificationWhatsappEnabled: false,
+      planId: matchedPlan.id,
+      planCode: matchedPlan.code,
+      planName: matchedPlan.name,
+      billingCycle: request.billingCycle,
+      monthlyPriceEtb: matchedPlan.monthlyPriceEtb,
+      quarterlyPriceEtb:
+        matchedPlan.quarterlyPriceEtb ?? Math.round(matchedPlan.monthlyPriceEtb * 2.7),
+      annualPriceEtb: matchedPlan.annualPriceEtb,
+      subscriptionStartDate: today,
+      trialDays: matchedPlan.trialDays,
+      subscriptionExpiresAt: addDaysIso(today, durationDays),
+      studentLimit: matchedPlan.studentLimit,
+      staffLimit: matchedPlan.staffLimit,
+      storageLimitMb: matchedPlan.storageLimitMb,
+      aiMonthlyQuota: matchedPlan.aiMonthlyQuota,
+      enabledModules: matchedPlan.includedModules,
+      markInitialInvoicePaid: false,
+    },
+    actor
+  );
+
+  const now = new Date().toISOString();
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'institute_registration_requests', request.id), {
+    status: 'APPROVED',
+    provisionedTenantId: result.tenantId,
+    reviewedBy: actor.uid,
+    reviewedByName: actor.fullName.slice(0, 120),
+    reviewedAt: now,
+    updatedAt: now,
+  });
+
+  // Immediately bind the applicant's existing Firebase Auth profile as ADMIN of the new tenant
+  if (request.applicantUid) {
+    try {
+      const profSnap = await getDoc(doc(db, 'profiles', request.applicantUid));
+      if (profSnap.exists()) {
+        batch.update(doc(db, 'profiles', request.applicantUid), {
+          tenantId: result.tenantId,
+          role: 'ADMIN',
+          isActive: true,
+          updatedAt: now,
+        });
+      }
+    } catch {
+      // Applicant can also claim via tenant_invitations on sign-in
+    }
+  }
+
+  await batch.commit();
+  return result;
+}
+
+export async function rejectInstituteRegistrationRequest(
+  request: InstituteRegistrationRequest,
+  reason: string,
+  actor: PlatformActor
+): Promise<void> {
+  const now = new Date().toISOString();
+  const cleanReason = reason.trim().slice(0, 280) || 'Application declined after review.';
+  try {
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'institute_registration_requests', request.id), {
+      status: 'REJECTED',
+      rejectionReason: cleanReason,
+      reviewedBy: actor.uid,
+      reviewedByName: actor.fullName.slice(0, 120),
+      reviewedAt: now,
+      updatedAt: now,
+    });
+    batch.set(doc(db, 'audit_logs', makeId('aud_req_rej')), {
+      tenantId: DEFAULT_ZACMA_TENANT_ID,
+      actorId: actor.uid,
+      actorName: actor.fullName.slice(0, 120),
+      actorRole: actor.role,
+      actorPlatformRole: actor.platformRole,
+      action: 'INSTITUTE_REGISTRATION_REJECTED',
+      entityType: 'institute_registration_request',
+      entityId: request.id,
+      summary: `Rejected registration request for "${request.instituteName}" (${request.adminEmail}): ${cleanReason}`,
+      result: 'SUCCESS',
+      createdAt: now,
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `institute_registration_requests/${request.id}`);
+  }
+}
+
+export async function cancelOrExpireSubscription(
+  tenant: TenantRecord,
+  existingSub: PlatformSubscription | undefined,
+  targetStatus: 'CANCELLED' | 'EXPIRED',
+  reason: string,
+  actor: PlatformActor
+): Promise<void> {
+  if (tenant.tenantId === DEFAULT_ZACMA_TENANT_ID) {
+    throw new Error('The primary ZACMA Platform Owner tenant subscription cannot be cancelled.');
+  }
+  const now = new Date().toISOString();
+  const subId = existingSub?.id || `sub_${tenant.tenantId}`;
+  const cleanReason = reason.trim().slice(0, 280) || `Subscription marked ${targetStatus} by platform administration.`;
+  try {
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'tenants', tenant.id), {
+      status: targetStatus === 'EXPIRED' ? 'EXPIRED' : 'SUSPENDED',
+      suspendedReason: cleanReason,
+      suspendedAt: now,
+      updatedAt: now,
+    });
+    if (existingSub) {
+      batch.update(doc(db, 'platform_subscriptions', subId), {
+        status: targetStatus,
+        autoRenew: false,
+        notes: cleanReason,
+        updatedBy: actor.uid,
+        updatedAt: now,
+      });
+    }
+    batch.set(doc(db, 'audit_logs', makeId('aud_sub_stat')), {
+      tenantId: tenant.tenantId,
+      actorId: actor.uid,
+      actorName: actor.fullName.slice(0, 120),
+      actorRole: actor.role,
+      actorPlatformRole: actor.platformRole,
+      action: `SUBSCRIPTION_${targetStatus}`,
+      entityType: 'platform_subscription',
+      entityId: subId,
+      summary: `Marked subscription for "${tenant.name}" as ${targetStatus}: ${cleanReason}`,
+      result: 'SUCCESS',
+      createdAt: now,
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `platform_subscriptions/${subId}`);
+  }
+}
+
+/**
+ * Records a server-verified Chapa subscription payment made by an Institute Admin,
+ * issuing a PAID platform invoice, logging platform revenue, and activating/extending the plan.
+ */
+export async function completeChapaSubscriptionPayment(
+  params: {
+    tenant: TenantRecord;
+    existingSub?: PlatformSubscription;
+    plan: SubscriptionPlan;
+    billingCycle: BillingCycle;
+    amountEtb: number;
+    txRef: string;
+    chapaReference: string;
+    verificationProof: string;
+  },
+  actor: PlatformActor
+): Promise<{ invoiceNumber: string; newExpiresAt: string }> {
+  const now = new Date().toISOString();
+  const today = todayIsoDate();
+  const subId = params.existingSub?.id || `sub_${params.tenant.tenantId}`;
+  const durationDays =
+    params.billingCycle === 'ANNUAL' ? 365 : params.billingCycle === 'QUARTERLY' ? 90 : 30;
+  const baseDate =
+    params.tenant.subscriptionExpiresAt && params.tenant.subscriptionExpiresAt > today
+      ? params.tenant.subscriptionExpiresAt
+      : today;
+  const newExpiresAt = addDaysIso(baseDate, durationDays);
+  const invId = makeId('pinv');
+  const payId = makeId('ppay');
+  const invoiceNumber = `ZAC-INV-${new Date().getFullYear()}-${String(Math.floor(1000 + Math.random() * 9000))}`;
+
+  try {
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'tenants', params.tenant.id), {
+      status: 'ACTIVE',
+      planId: params.plan.id,
+      planCode: params.plan.code,
+      planName: params.plan.name,
+      billingCycle: params.billingCycle,
+      monthlyPriceEtb: params.plan.monthlyPriceEtb,
+      quarterlyPriceEtb:
+        params.plan.quarterlyPriceEtb ?? Math.round(params.plan.monthlyPriceEtb * 2.7),
+      annualPriceEtb: params.plan.annualPriceEtb,
+      studentLimit: params.plan.studentLimit,
+      staffLimit: params.plan.staffLimit,
+      storageLimitMb: params.plan.storageLimitMb,
+      aiMonthlyQuota: params.plan.aiMonthlyQuota,
+      enabledModules: params.plan.includedModules,
+      subscriptionStartDate: today,
+      subscriptionExpiresAt: newExpiresAt,
+      updatedAt: now,
+    });
+
+    batch.set(
+      doc(db, 'platform_subscriptions', subId),
+      cleanObject({
+        tenantId: params.tenant.tenantId,
+        tenantName: params.tenant.name,
+        planId: params.plan.id,
+        planCode: params.plan.code,
+        planName: params.plan.name,
+        billingCycle: params.billingCycle,
+        priceEtb: params.amountEtb,
+        currency: 'ETB',
+        status: 'ACTIVE',
+        startDate: params.existingSub?.startDate || today,
+        expiresAt: newExpiresAt,
+        autoRenew: true,
+        notes: `Verified via Chapa (${params.chapaReference}, proof ${params.verificationProof.slice(0, 12)}).`,
+        updatedBy: actor.uid,
+        createdAt: params.existingSub?.createdAt || now,
+        updatedAt: now,
+      })
+    );
+
+    batch.set(
+      doc(db, 'platform_invoices', invId),
+      cleanObject({
+        invoiceNumber,
+        tenantId: params.tenant.tenantId,
+        tenantName: params.tenant.name,
+        subscriptionId: subId,
+        planName: params.plan.name,
+        billingCycle: params.billingCycle,
+        amountEtb: params.amountEtb,
+        currency: 'ETB',
+        dueDate: today,
+        status: 'PAID',
+        paidAt: now,
+        paymentRef: params.txRef,
+        notes: `Chapa verified ref ${params.chapaReference} (proof ${params.verificationProof.slice(0, 12)}).`,
+        issuedBy: actor.uid,
+        issuedByName: actor.fullName.slice(0, 120),
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    batch.set(
+      doc(db, 'platform_payments', payId),
+      cleanObject({
+        paymentRef: params.txRef,
+        invoiceId: invId,
+        invoiceNumber,
+        tenantId: params.tenant.tenantId,
+        tenantName: params.tenant.name,
+        planName: params.plan.name,
+        amountEtb: params.amountEtb,
+        currency: 'ETB',
+        paymentDate: today,
+        paymentMethod: 'Chapa',
+        status: 'COMPLETED',
+        recordedBy: actor.uid,
+        recordedByName: actor.fullName.slice(0, 120),
+        notes: `Server-verified Chapa online renewal (${params.chapaReference}).`,
+        createdAt: now,
+      })
+    );
+
+    batch.set(doc(db, 'audit_logs', makeId('aud_chapa_sub')), {
+      tenantId: params.tenant.tenantId,
+      actorId: actor.uid,
+      actorName: actor.fullName.slice(0, 120),
+      actorRole: actor.role,
+      action: 'CHAPA_SUBSCRIPTION_PAID',
+      entityType: 'platform_subscription',
+      entityId: subId,
+      summary: `Chapa verified subscription payment of ETB ${params.amountEtb.toLocaleString()} for ${params.plan.name} (${params.billingCycle}). Valid until ${newExpiresAt}.`,
+      result: 'SUCCESS',
+      createdAt: now,
+    });
+
+    await batch.commit();
+    return { invoiceNumber, newExpiresAt };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `platform_subscriptions/${subId}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Platform-Wide Announcements (Super Admin -> Institutes)
+// ---------------------------------------------------------------------------
+
+export async function publishPlatformAnnouncement(
+  input: {
+    title: string;
+    message: string;
+    severity: PlatformAnnouncement['severity'];
+    targetAudience: PlatformAnnouncement['targetAudience'];
+    targetTenantId?: string;
+    expiresAt?: string;
+  },
+  actor: PlatformActor
+): Promise<void> {
+  const now = new Date().toISOString();
+  const annId = makeId('pann');
+  try {
+    const batch = writeBatch(db);
+    batch.set(
+      doc(db, 'platform_announcements', annId),
+      cleanObject({
+        title: input.title.trim().slice(0, 160),
+        message: input.message.trim().slice(0, 800),
+        severity: input.severity,
+        targetAudience: input.targetAudience,
+        targetTenantId: input.targetAudience === 'SPECIFIC_TENANT' ? input.targetTenantId : undefined,
+        isActive: true,
+        expiresAt: input.expiresAt?.trim() || undefined,
+        createdBy: actor.uid,
+        createdByName: actor.fullName.slice(0, 120),
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+    batch.set(doc(db, 'audit_logs', makeId('aud_pann')), {
+      tenantId: input.targetTenantId || DEFAULT_ZACMA_TENANT_ID,
+      actorId: actor.uid,
+      actorName: actor.fullName.slice(0, 120),
+      actorRole: actor.role,
+      actorPlatformRole: actor.platformRole,
+      action: 'PLATFORM_ANNOUNCEMENT_PUBLISHED',
+      entityType: 'platform_announcement',
+      entityId: annId,
+      summary: `Published platform announcement "${input.title.trim()}" (${input.targetAudience}).`,
+      result: 'SUCCESS',
+      createdAt: now,
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'platform_announcements');
+  }
+}
+
+export async function togglePlatformAnnouncement(
+  ann: PlatformAnnouncement,
+  isActive: boolean
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'platform_announcements', ann.id), {
+      isActive,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `platform_announcements/${ann.id}`);
+  }
+}
+
+export async function deletePlatformAnnouncement(annId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'platform_announcements', annId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `platform_announcements/${annId}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tenant-Isolated Academic Structure: Departments, Classes/Batches & Documents
+// ---------------------------------------------------------------------------
+
+export async function saveDepartment(
+  input: {
+    id?: string;
+    tenantId: string;
+    code: string;
+    name: string;
+    headName?: string;
+    description?: string;
+    isActive: boolean;
+    existingCreatedAt?: string;
+  },
+  actor: PlatformActor
+): Promise<void> {
+  const now = new Date().toISOString();
+  const deptId = input.id || makeId('dept');
+  try {
+    const batch = writeBatch(db);
+    batch.set(
+      doc(db, 'departments', deptId),
+      cleanObject({
+        tenantId: input.tenantId,
+        code: input.code.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20) || 'DEPT',
+        name: input.name.trim().slice(0, 120),
+        headName: input.headName?.trim().slice(0, 120),
+        description: input.description?.trim().slice(0, 400),
+        isActive: input.isActive,
+        createdBy: actor.uid,
+        createdAt: input.existingCreatedAt || now,
+        updatedAt: now,
+      })
+    );
+    batch.set(doc(db, 'audit_logs', makeId('aud_dept')), {
+      tenantId: input.tenantId,
+      actorId: actor.uid,
+      actorName: actor.fullName.slice(0, 120),
+      actorRole: actor.role,
+      action: input.id ? 'DEPARTMENT_UPDATED' : 'DEPARTMENT_CREATED',
+      entityType: 'department',
+      entityId: deptId,
+      summary: `${input.id ? 'Updated' : 'Created'} department "${input.name.trim()}" (${input.code.trim().toUpperCase()}).`,
+      result: 'SUCCESS',
+      createdAt: now,
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `departments/${deptId}`);
+  }
+}
+
+export async function deleteDepartment(
+  dept: Department,
+  actor: PlatformActor
+): Promise<void> {
+  const now = new Date().toISOString();
+  try {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'departments', dept.id));
+    batch.set(doc(db, 'audit_logs', makeId('aud_dept_del')), {
+      tenantId: dept.tenantId,
+      actorId: actor.uid,
+      actorName: actor.fullName.slice(0, 120),
+      actorRole: actor.role,
+      action: 'DEPARTMENT_DELETED',
+      entityType: 'department',
+      entityId: dept.id,
+      summary: `Deleted department "${dept.name}" (${dept.code}).`,
+      result: 'SUCCESS',
+      createdAt: now,
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `departments/${dept.id}`);
+  }
+}
+
+export async function saveClassBatch(
+  input: {
+    id?: string;
+    tenantId: string;
+    batchCode: string;
+    name: string;
+    courseId: string;
+    courseName: string;
+    departmentId?: string;
+    departmentName?: string;
+    instructorId?: string;
+    instructorName?: string;
+    room?: string;
+    schedule: string;
+    startDate: string;
+    endDate: string;
+    capacity: number;
+    status: ClassBatchStatus;
+    existingCreatedAt?: string;
+  },
+  actor: PlatformActor
+): Promise<void> {
+  const now = new Date().toISOString();
+  const batchId = input.id || makeId('batch');
+  try {
+    const batch = writeBatch(db);
+    batch.set(
+      doc(db, 'class_batches', batchId),
+      cleanObject({
+        tenantId: input.tenantId,
+        batchCode: input.batchCode.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 28) || 'BCH',
+        name: input.name.trim().slice(0, 120),
+        courseId: input.courseId,
+        courseName: input.courseName.trim().slice(0, 120),
+        departmentId: input.departmentId,
+        departmentName: input.departmentName?.trim().slice(0, 120),
+        instructorId: input.instructorId,
+        instructorName: input.instructorName?.trim().slice(0, 120),
+        room: input.room?.trim().slice(0, 80),
+        schedule: input.schedule.trim().slice(0, 140),
+        startDate: input.startDate,
+        endDate: input.endDate,
+        capacity: Math.max(1, Number(input.capacity || 30)),
+        status: input.status,
+        createdBy: actor.uid,
+        createdAt: input.existingCreatedAt || now,
+        updatedAt: now,
+      })
+    );
+    batch.set(doc(db, 'audit_logs', makeId('aud_batch')), {
+      tenantId: input.tenantId,
+      actorId: actor.uid,
+      actorName: actor.fullName.slice(0, 120),
+      actorRole: actor.role,
+      action: input.id ? 'CLASS_BATCH_UPDATED' : 'CLASS_BATCH_CREATED',
+      entityType: 'class_batch',
+      entityId: batchId,
+      summary: `${input.id ? 'Updated' : 'Created'} class batch "${input.name.trim()}" (${input.batchCode}) for ${input.courseName}.`,
+      result: 'SUCCESS',
+      createdAt: now,
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `class_batches/${batchId}`);
+  }
+}
+
+export async function deleteClassBatch(
+  cb: ClassBatch,
+  actor: PlatformActor
+): Promise<void> {
+  const now = new Date().toISOString();
+  try {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'class_batches', cb.id));
+    batch.set(doc(db, 'audit_logs', makeId('aud_batch_del')), {
+      tenantId: cb.tenantId,
+      actorId: actor.uid,
+      actorName: actor.fullName.slice(0, 120),
+      actorRole: actor.role,
+      action: 'CLASS_BATCH_DELETED',
+      entityType: 'class_batch',
+      entityId: cb.id,
+      summary: `Deleted class batch "${cb.name}" (${cb.batchCode}).`,
+      result: 'SUCCESS',
+      createdAt: now,
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `class_batches/${cb.id}`);
+  }
+}
+
+export async function saveInstituteDocument(
+  input: {
+    tenantId: string;
+    title: string;
+    category: InstituteDocumentCategory;
+    description?: string;
+    fileName: string;
+    fileMimeType: string;
+    fileSizeBytes: number;
+    fileDataUrl: string;
+    visibility: InstituteDocument['visibility'];
+    departmentName?: string;
+    courseName?: string;
+  },
+  actor: PlatformActor
+): Promise<void> {
+  if (input.fileDataUrl.length > 640000 || input.fileSizeBytes > 640000) {
+    throw new Error('File exceeds the 450 KB secure document limit. Please compress the file before uploading.');
+  }
+  const now = new Date().toISOString();
+  const docId = makeId('idoc');
+  try {
+    const batch = writeBatch(db);
+    batch.set(
+      doc(db, 'institute_documents', docId),
+      cleanObject({
+        tenantId: input.tenantId,
+        title: input.title.trim().slice(0, 160),
+        category: input.category,
+        description: input.description?.trim().slice(0, 400),
+        fileName: input.fileName.trim().slice(0, 160),
+        fileMimeType: input.fileMimeType.trim().slice(0, 100) || 'application/octet-stream',
+        fileSizeBytes: input.fileSizeBytes,
+        fileDataUrl: input.fileDataUrl,
+        visibility: input.visibility,
+        departmentName: input.departmentName?.trim().slice(0, 120),
+        courseName: input.courseName?.trim().slice(0, 120),
+        uploadedBy: actor.uid,
+        uploadedByName: actor.fullName.slice(0, 120),
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+    batch.set(doc(db, 'audit_logs', makeId('aud_idoc')), {
+      tenantId: input.tenantId,
+      actorId: actor.uid,
+      actorName: actor.fullName.slice(0, 120),
+      actorRole: actor.role,
+      action: 'INSTITUTE_DOCUMENT_UPLOADED',
+      entityType: 'institute_document',
+      entityId: docId,
+      summary: `Uploaded institutional document "${input.title.trim()}" (${input.category}, ${input.visibility}).`,
+      result: 'SUCCESS',
+      createdAt: now,
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `institute_documents/${docId}`);
+  }
+}
+
+export async function deleteInstituteDocument(
+  item: InstituteDocument,
+  actor: PlatformActor
+): Promise<void> {
+  const now = new Date().toISOString();
+  try {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'institute_documents', item.id));
+    batch.set(doc(db, 'audit_logs', makeId('aud_idoc_del')), {
+      tenantId: item.tenantId,
+      actorId: actor.uid,
+      actorName: actor.fullName.slice(0, 120),
+      actorRole: actor.role,
+      action: 'INSTITUTE_DOCUMENT_DELETED',
+      entityType: 'institute_document',
+      entityId: item.id,
+      summary: `Deleted institutional document "${item.title}" (${item.fileName}).`,
+      result: 'SUCCESS',
+      createdAt: now,
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `institute_documents/${item.id}`);
+  }
+}
+

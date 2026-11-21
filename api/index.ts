@@ -29,6 +29,11 @@ import {
   type ChapaVerifyParams,
 } from '../server/chapaGateway.ts';
 import { handleScanIdDocument, type ScanIdRequestBody } from '../server/idScanner.ts';
+import {
+  buildRateLimitHeaders,
+  checkApiRateLimit,
+  extractClientIp,
+} from '../server/rateLimiter.ts';
 
 type VercelReq = IncomingMessage & {
   method?: string;
@@ -138,6 +143,24 @@ export default async function handler(req: VercelReq, res: VercelRes): Promise<v
     typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined;
 
   try {
+    // Enforce server-side API rate limiting across all Vercel serverless routes
+    const clientIp = extractClientIp(
+      req.headers as Record<string, string | string[] | undefined>,
+      req.socket?.remoteAddress
+    );
+    const rl = checkApiRateLimit(routePath, clientIp);
+    const rlHeaders = buildRateLimitHeaders(rl);
+    Object.entries(rlHeaders).forEach(([k, v]) => res.setHeader(k, v));
+    if (!rl.allowed) {
+      applyNoStoreHeaders(res);
+      sendJson(res, 429, {
+        code: 'RATE_LIMIT_EXCEEDED',
+        error: `Too many requests to ${rl.bucket} API. Please retry after ${rl.retryAfterSec} seconds.`,
+        retryAfterSec: rl.retryAfterSec,
+      });
+      return;
+    }
+
     // Health & Platform Setup
     if (routePath === '/api/health') {
       const out = handleHealth();

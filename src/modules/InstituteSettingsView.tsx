@@ -1,26 +1,35 @@
 import React, { useEffect, useState } from 'react';
 import {
   Building2,
+  Check,
   CheckCircle2,
+  Copy,
   CreditCard,
+  Globe,
   Headphones,
   Layers,
+  Loader2,
   Palette,
   Save,
   Send,
   ShieldCheck,
+  Sparkles,
   Upload,
 } from 'lucide-react';
 import { usePortal } from '../context/PortalContext';
 import {
   ALL_SAAS_MODULES,
+  completeChapaSubscriptionPayment,
   createSupportTicket,
+  DEFAULT_SUBSCRIPTION_PLANS,
   updateOwnInstituteBranding,
 } from '../lib/saasService';
 import { compressImageToDataUrl } from '../lib/zacmaService';
 import {
+  BillingCycle,
   formatDateShort,
   formatEtb,
+  formatEtbCompact,
   PaymentMethod,
   SupportTicket,
   TenantRecord,
@@ -42,14 +51,39 @@ export function InstituteSettingsView() {
     activeTenantId,
     students,
     staffRecords,
+    subscriptionPlans,
+    platformSubscriptions,
     platformInvoices,
     supportTickets,
     canWriteInTenant,
     pushToast,
   } = usePortal();
 
-  const [tab, setTab] = useState<'BRANDING' | 'SUBSCRIPTION' | 'SUPPORT'>('BRANDING');
+  const [tab, setTab] = useState<'BRANDING' | 'SUBSCRIPTION' | 'SUPPORT'>(() => {
+    if (typeof window !== 'undefined' && window.location.search.includes('chapa_sub_tx_ref=')) {
+      return 'SUBSCRIPTION';
+    }
+    return 'BRANDING';
+  });
   const [saving, setSaving] = useState(false);
+  const [copiedPortalUrl, setCopiedPortalUrl] = useState(false);
+
+  // Chapa Online SaaS Subscription Upgrade / Renewal State
+  const paidPlans = (subscriptionPlans.length > 0 ? subscriptionPlans : DEFAULT_SUBSCRIPTION_PLANS).filter(
+    (p) => p.monthlyPriceEtb > 0
+  );
+  const [checkoutPlanId, setCheckoutPlanId] = useState<string>(paidPlans[1]?.id || paidPlans[0]?.id || 'plan_professional');
+  const [checkoutCycle, setCheckoutCycle] = useState<BillingCycle>('MONTHLY');
+  const [startingChapa, setStartingChapa] = useState(false);
+  const [verifyingChapa, setVerifyingChapa] = useState(false);
+  const [pendingChapaRef, setPendingChapaRef] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      return new URLSearchParams(window.location.search).get('chapa_sub_tx_ref');
+    } catch {
+      return null;
+    }
+  });
 
   // Branding & Operational Config State
   const [name, setName] = useState('');
@@ -101,8 +135,8 @@ export function InstituteSettingsView() {
     setLogoUrl(activeTenant.logoUrl || '');
     setPrimaryColor(activeTenant.primaryColor || '#0B2545');
     setSecondaryColor(activeTenant.secondaryColor || '#D97706');
-    setStudentIdPrefix(activeTenant.studentIdPrefix || 'ZAC-STU');
-    setStaffIdPrefix(activeTenant.staffIdPrefix || 'ZAC-STA');
+    setStudentIdPrefix(activeTenant.studentIdPrefix || 'ZAC');
+    setStaffIdPrefix(activeTenant.staffIdPrefix || 'ZAC');
     setReceiptPrefix(activeTenant.receiptPrefix || 'RCP');
     setCurrency(activeTenant.currency || 'ETB');
     setTimezone(activeTenant.timezone || 'Africa/Addis_Ababa');
@@ -119,6 +153,147 @@ export function InstituteSettingsView() {
     setWhatsappGatewayStatus(activeTenant.whatsappGatewayStatus || 'UNCONFIGURED');
     setSmsSenderLabel(activeTenant.smsSenderLabel || '');
   }, [activeTenant]);
+
+  const handleVerifyChapaSubRef = async (txRef: string) => {
+    if (!profile || !activeTenant || !txRef) return;
+    setVerifyingChapa(true);
+    try {
+      let savedIntent: { planId?: string; billingCycle?: BillingCycle; amountEtb?: number } = {};
+      try {
+        const raw = window.sessionStorage.getItem('zims_chapa_sub_intent');
+        if (raw) savedIntent = JSON.parse(raw);
+      } catch {
+        savedIntent = {};
+      }
+      const res = await fetch('/api/chapa/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txRef }),
+      });
+      const data = (await res.json()) as {
+        verified?: boolean;
+        amount?: number;
+        chapaReference?: string;
+        verificationProof?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.verified || !data.verificationProof) {
+        throw new Error(data.error || 'Chapa payment has not been confirmed yet.');
+      }
+
+      const targetPlan =
+        paidPlans.find((p) => p.id === (savedIntent.planId || checkoutPlanId)) || paidPlans[0];
+      const targetCycle = savedIntent.billingCycle || checkoutCycle;
+      const verifiedAmount =
+        typeof data.amount === 'number' && data.amount > 0
+          ? data.amount
+          : savedIntent.amountEtb || targetPlan.monthlyPriceEtb;
+      const existingSub = platformSubscriptions.find((s) => s.tenantId === activeTenant.tenantId);
+
+      const completion = await completeChapaSubscriptionPayment(
+        {
+          tenant: activeTenant,
+          existingSub,
+          plan: targetPlan,
+          billingCycle: targetCycle,
+          amountEtb: verifiedAmount,
+          txRef,
+          chapaReference: data.chapaReference || txRef,
+          verificationProof: data.verificationProof,
+        },
+        {
+          uid: profile.uid,
+          fullName: profile.fullName,
+          role: profile.role,
+          platformRole: profile.platformRole,
+        }
+      );
+
+      try {
+        window.sessionStorage.removeItem('zims_chapa_sub_intent');
+        window.history.replaceState(null, '', window.location.pathname);
+      } catch {
+        // Ignore
+      }
+      setPendingChapaRef(null);
+      pushToast(
+        'success',
+        `Subscription activated! Invoice ${completion.invoiceNumber} marked PAID. Valid through ${formatDateShort(completion.newExpiresAt)}.`
+      );
+    } catch (err) {
+      pushToast(
+        'error',
+        err instanceof Error ? err.message : 'Unable to verify Chapa subscription payment.'
+      );
+    } finally {
+      setVerifyingChapa(false);
+    }
+  };
+
+  const handleStartChapaSubscriptionCheckout = async () => {
+    if (!profile || !activeTenant) return;
+    if (!canWriteInTenant) {
+      pushToast('error', 'Suspended accounts must contact ZACMA Platform Support to reactivate.');
+      return;
+    }
+    const chosenPlan = paidPlans.find((p) => p.id === checkoutPlanId) || paidPlans[0];
+    if (!chosenPlan) return;
+    const amountEtb =
+      checkoutCycle === 'ANNUAL'
+        ? chosenPlan.annualPriceEtb
+        : checkoutCycle === 'QUARTERLY'
+        ? chosenPlan.quarterlyPriceEtb ?? Math.round(chosenPlan.monthlyPriceEtb * 2.7)
+        : chosenPlan.monthlyPriceEtb;
+    const txRef = `ZIMS-SUB-${activeTenant.tenantId.slice(0, 12).toUpperCase()}-${Date.now()}`;
+
+    setStartingChapa(true);
+    try {
+      const nameParts = (profile.fullName || 'Institute Admin').trim().split(/\s+/);
+      const res = await fetch('/api/chapa/initialize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          txRef,
+          amount: amountEtb,
+          currency: 'ETB',
+          email: activeTenant.email || profile.email,
+          firstName: nameParts[0] || 'Institute',
+          lastName: nameParts.slice(1).join(' ') || 'Admin',
+          phoneNumber: activeTenant.phone,
+          purpose: 'SUBSCRIPTION',
+          description: `${chosenPlan.name} (${checkoutCycle}) for ${activeTenant.name}`,
+        }),
+      });
+      const data = (await res.json()) as { checkoutUrl?: string; error?: string };
+      if (!res.ok || !data.checkoutUrl) {
+        throw new Error(
+          data.error || 'Chapa gateway is not configured on this server. Set CHAPA_SECRET_KEY or contact ZACMA Platform Billing.'
+        );
+      }
+
+      try {
+        window.sessionStorage.setItem(
+          'zims_chapa_sub_intent',
+          JSON.stringify({
+            txRef,
+            planId: chosenPlan.id,
+            billingCycle: checkoutCycle,
+            amountEtb,
+          })
+        );
+      } catch {
+        // Ignore
+      }
+      window.location.href = data.checkoutUrl;
+    } catch (err) {
+      pushToast(
+        'error',
+        err instanceof Error ? err.message : 'Unable to start Chapa subscription checkout.'
+      );
+    } finally {
+      setStartingChapa(false);
+    }
+  };
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -652,6 +827,30 @@ export function InstituteSettingsView() {
       {/* TAB 2: SUBSCRIPTION & USAGE QUOTAS */}
       {tab === 'SUBSCRIPTION' && (
         <div className="space-y-6">
+          {/* Chapa Return Verification Prompt */}
+          {pendingChapaRef && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-xs text-blue-950">
+                <p className="font-bold flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-[#172DEB]" />
+                  Chapa Subscription Checkout Returned
+                </p>
+                <p className="text-blue-900/90 mt-0.5">
+                  Reference <code className="font-mono font-bold">{pendingChapaRef}</code> is ready for server-side verification and automatic plan activation.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={verifyingChapa}
+                onClick={() => void handleVerifyChapaSubRef(pendingChapaRef)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#172DEB] hover:bg-blue-800 text-white text-xs font-bold rounded-lg disabled:opacity-50 cursor-pointer"
+              >
+                {verifyingChapa && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{verifyingChapa ? 'Verifying with Chapa...' : 'Verify & Activate Plan'}</span>
+              </button>
+            </div>
+          )}
+
           <div className="bg-slate-900 text-white rounded-xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-amber-400">
@@ -664,11 +863,118 @@ export function InstituteSettingsView() {
                 <strong>{formatDateShort(activeTenant.subscriptionExpiresAt)}</strong>
               </p>
             </div>
-            <div className="text-left sm:text-right">
-              <p className="text-xs text-slate-400">Tenant Identifier</p>
-              <p className="font-mono text-sm font-bold text-white">{activeTenant.tenantId}</p>
+            <div className="text-left sm:text-right space-y-1.5">
+              <div>
+                <p className="text-[11px] text-slate-400">Tenant Identifier</p>
+                <p className="font-mono text-sm font-bold text-white">{activeTenant.tenantId}</p>
+              </div>
+              {activeTenant.slug && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const url = `${window.location.origin}/institute/${activeTenant.slug}`;
+                    void navigator.clipboard?.writeText(url);
+                    setCopiedPortalUrl(true);
+                    window.setTimeout(() => setCopiedPortalUrl(false), 2000);
+                    pushToast('success', 'Institute portal URL copied to clipboard.');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-[11px] font-mono text-blue-200 cursor-pointer"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  <span>/institute/{activeTenant.slug}</span>
+                  {copiedPortalUrl ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                </button>
+              )}
             </div>
           </div>
+
+          {/* Self-Service Online Renewal / Plan Upgrade via Chapa */}
+          {!activeTenant.isDefaultPlatformTenant && paidPlans.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                <div>
+                  <h3 className="text-sm font-display font-bold text-slate-900 flex items-center gap-2">
+                    <CreditCard className="w-4 h-4 text-[#172DEB]" />
+                    Upgrade or Renew Subscription Online (Chapa ETB)
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Instant server-verified subscription renewal via Telebirr, CBE Birr, or Bank Card through Chapa.
+                  </p>
+                </div>
+                <div className="inline-flex items-center bg-slate-100 p-1 rounded-lg text-xs">
+                  {(
+                    [
+                      { id: 'MONTHLY', label: 'Monthly' },
+                      { id: 'QUARTERLY', label: 'Quarterly' },
+                      { id: 'ANNUAL', label: 'Annual' },
+                    ] as const
+                  ).map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setCheckoutCycle(c.id)}
+                      className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
+                        checkoutCycle === c.id ? 'bg-[#172DEB] text-white' : 'text-slate-600'
+                      }`}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {paidPlans.map((p) => {
+                  const selected = p.id === checkoutPlanId;
+                  const price =
+                    checkoutCycle === 'ANNUAL'
+                      ? p.annualPriceEtb
+                      : checkoutCycle === 'QUARTERLY'
+                      ? p.quarterlyPriceEtb ?? Math.round(p.monthlyPriceEtb * 2.7)
+                      : p.monthlyPriceEtb;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setCheckoutPlanId(p.id)}
+                      className={`text-left p-4 rounded-xl border-2 transition-all cursor-pointer ${
+                        selected
+                          ? 'border-[#172DEB] bg-blue-50/40'
+                          : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <p className="text-xs font-bold text-slate-900">{p.name}</p>
+                      <p className="text-lg font-mono font-extrabold text-[#172DEB] mt-1 tabular-nums">
+                        {formatEtbCompact(price)}{' '}
+                        <span className="text-[11px] font-sans font-normal text-slate-500">
+                          / {checkoutCycle === 'ANNUAL' ? 'year' : checkoutCycle === 'QUARTERLY' ? 'quarter' : 'month'}
+                        </span>
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        {p.studentLimit.toLocaleString()} students · {p.staffLimit} staff · {p.aiMonthlyQuota.toLocaleString()} AI req/mo
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  disabled={startingChapa || !canWriteInTenant}
+                  onClick={() => void handleStartChapaSubscriptionCheckout()}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#172DEB] hover:bg-blue-800 text-white text-xs font-bold rounded-lg disabled:opacity-50 cursor-pointer"
+                >
+                  {startingChapa ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <CreditCard className="w-4 h-4" />
+                  )}
+                  <span>{startingChapa ? 'Opening Chapa Checkout...' : 'Pay & Activate via Chapa'}</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Usage Progress Bars */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

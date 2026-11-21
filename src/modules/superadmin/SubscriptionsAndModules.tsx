@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import {
+  Ban,
   Bell,
   Check,
+  Clock,
   CreditCard,
   Edit3,
   Layers,
@@ -13,6 +15,7 @@ import {
 import { usePortal } from '../../context/PortalContext';
 import {
   ALL_SAAS_MODULES,
+  cancelOrExpireSubscription,
   DEFAULT_SUBSCRIPTION_PLANS,
   saveSubscriptionPlan,
   sendSubscriptionExpiryReminder,
@@ -46,6 +49,11 @@ export function InstituteSubscriptionsView() {
   const [expiry, setExpiry] = useState(addDaysIso(todayIsoDate(), 30));
   const [genInvoice, setGenInvoice] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<{
+    tenant: TenantRecord;
+    mode: 'CANCELLED' | 'EXPIRED';
+  } | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
 
   const plans = subscriptionPlans.length > 0 ? subscriptionPlans : DEFAULT_SUBSCRIPTION_PLANS;
   const today = todayIsoDate();
@@ -97,6 +105,32 @@ export function InstituteSubscriptionsView() {
     }
   };
 
+  const handleConfirmCancelOrExpire = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancelTarget || !profile || !platformRole) return;
+    setBusy(true);
+    try {
+      const sub = platformSubscriptions.find((s) => s.tenantId === cancelTarget.tenant.tenantId);
+      await cancelOrExpireSubscription(
+        cancelTarget.tenant,
+        sub,
+        cancelTarget.mode,
+        cancelReason,
+        { uid: profile.uid, fullName: profile.fullName, role: profile.role, platformRole }
+      );
+      pushToast(
+        'info',
+        `${cancelTarget.tenant.name} subscription marked ${cancelTarget.mode}.`
+      );
+      setCancelTarget(null);
+      setCancelReason('');
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Action failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div>
@@ -139,6 +173,8 @@ export function InstituteSubscriptionsView() {
                         ? 'ETB 0'
                         : t.billingCycle === 'ANNUAL'
                         ? `${formatEtbCompact(t.annualPriceEtb)}/yr`
+                        : t.billingCycle === 'QUARTERLY'
+                        ? `${formatEtbCompact(t.quarterlyPriceEtb ?? Math.round(t.monthlyPriceEtb * 2.7))}/qtr`
                         : `${formatEtbCompact(t.monthlyPriceEtb)}/mo`}
                     </td>
                     <td className="px-4 py-3 tabular-nums">
@@ -164,7 +200,7 @@ export function InstituteSubscriptionsView() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       {!t.isDefaultPlatformTenant && (
-                        <div className="inline-flex items-center gap-1.5">
+                        <div className="inline-flex items-center gap-1.5 flex-wrap justify-end">
                           <button
                             type="button"
                             onClick={() => void handleSendReminder(t)}
@@ -180,12 +216,45 @@ export function InstituteSubscriptionsView() {
                               setRenewTarget(t);
                               setPlanId(t.planId || plans[0].id);
                               setCycle(t.billingCycle === 'TRIAL' ? 'MONTHLY' : t.billingCycle);
-                              setExpiry(addDaysIso(todayIsoDate(), t.billingCycle === 'ANNUAL' ? 365 : 30));
+                              setExpiry(
+                                addDaysIso(
+                                  todayIsoDate(),
+                                  t.billingCycle === 'ANNUAL'
+                                    ? 365
+                                    : t.billingCycle === 'QUARTERLY'
+                                    ? 90
+                                    : 30
+                                )
+                              );
                             }}
                             className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#0B2545] hover:bg-slate-800 rounded"
                           >
                             <RefreshCw className="w-3 h-3" />
                             Renew / Change
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCancelTarget({ tenant: t, mode: 'EXPIRED' });
+                              setCancelReason('');
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-amber-700 bg-white border border-amber-200 hover:bg-amber-50 rounded"
+                            title="Mark subscription expired"
+                          >
+                            <Clock className="w-3 h-3" />
+                            Expire
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCancelTarget({ tenant: t, mode: 'CANCELLED' });
+                              setCancelReason('');
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 rounded"
+                            title="Cancel subscription"
+                          >
+                            <Ban className="w-3 h-3" />
+                            Cancel
                           </button>
                         </div>
                       )}
@@ -228,13 +297,19 @@ export function InstituteSubscriptionsView() {
                     onChange={(e) => {
                       const c = e.target.value as BillingCycle;
                       setCycle(c);
-                      setExpiry(addDaysIso(todayIsoDate(), c === 'ANNUAL' ? 365 : c === 'TRIAL' ? 14 : 30));
+                      setExpiry(
+                        addDaysIso(
+                          todayIsoDate(),
+                          c === 'ANNUAL' ? 365 : c === 'QUARTERLY' ? 90 : c === 'TRIAL' ? 14 : 30
+                        )
+                      );
                     }}
                     className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
                   >
-                    <option value="MONTHLY">Monthly</option>
-                    <option value="ANNUAL">Annual</option>
-                    <option value="TRIAL">Trial</option>
+                    <option value="MONTHLY">Monthly (30 days)</option>
+                    <option value="QUARTERLY">Quarterly (90 days)</option>
+                    <option value="ANNUAL">Annual (365 days)</option>
+                    <option value="TRIAL">Trial (14 days)</option>
                   </select>
                 </div>
                 <div>
@@ -275,6 +350,52 @@ export function InstituteSubscriptionsView() {
           </form>
         </div>
       )}
+
+      {cancelTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleConfirmCancelOrExpire}
+            className="bg-white rounded-xl border border-slate-200 shadow-xl w-full max-w-md p-5 space-y-4"
+          >
+            <h3 className="text-sm font-bold text-red-700">
+              {cancelTarget.mode === 'CANCELLED'
+                ? `Cancel Subscription — ${cancelTarget.tenant.name}`
+                : `Mark Subscription Expired — ${cancelTarget.tenant.name}`}
+            </h3>
+            <p className="text-xs text-slate-600">
+              This updates the institute&apos;s subscription lifecycle status to{' '}
+              <strong>{cancelTarget.mode}</strong> and records an audit entry while preserving all institute data.
+            </p>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Reason *</label>
+              <textarea
+                required
+                rows={3}
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="e.g., Unpaid renewal invoice past grace period or client cancellation request"
+                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCancelTarget(null)}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                Close
+              </button>
+              <button
+                type="submit"
+                disabled={busy}
+                className="px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg"
+              >
+                Confirm {cancelTarget.mode === 'CANCELLED' ? 'Cancellation' : 'Expiration'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
@@ -293,6 +414,7 @@ export function SubscriptionPlansView() {
       name: 'Custom Institutional Plan',
       tagline: 'Tailored limits and modules for multi-campus training centers.',
       monthlyPriceEtb: 12000,
+      quarterlyPriceEtb: 32400,
       annualPriceEtb: 120000,
       trialDays: 14,
       studentLimit: 1500,
@@ -368,6 +490,11 @@ export function SubscriptionPlansView() {
                   {p.monthlyPriceEtb === 0 ? 'FREE' : formatEtbCompact(p.monthlyPriceEtb)}
                   {p.monthlyPriceEtb > 0 && <span className="text-xs font-normal text-slate-500"> /mo</span>}
                 </p>
+                {p.monthlyPriceEtb > 0 && (
+                  <p className="text-[11px] text-blue-700 font-medium tabular-nums mt-0.5">
+                    Quarterly: {formatEtbCompact(p.quarterlyPriceEtb ?? Math.round(p.monthlyPriceEtb * 2.7))} /qtr
+                  </p>
+                )}
                 {p.annualPriceEtb > 0 && (
                   <p className="text-[11px] text-emerald-700 font-medium tabular-nums mt-0.5">
                     Annual: {formatEtbCompact(p.annualPriceEtb)} /yr
@@ -472,6 +599,16 @@ export function SubscriptionPlansView() {
                 />
               </div>
               <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Quarterly Price (ETB)</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={editing.quarterlyPriceEtb ?? Math.round(editing.monthlyPriceEtb * 2.7)}
+                  onChange={(e) => setEditing({ ...editing, quarterlyPriceEtb: Number(e.target.value) })}
+                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg tabular-nums"
+                />
+              </div>
+              <div className="sm:col-span-2">
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Annual Price (ETB)</label>
                 <input
                   type="number"

@@ -4,8 +4,10 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  Clock,
   Copy,
   ExternalLink,
+  Globe,
   KeyRound,
   Layers,
   Palette,
@@ -22,12 +24,14 @@ import {
 import { usePortal } from '../../context/PortalContext';
 import {
   ALL_SAAS_MODULES,
+  approveInstituteRegistrationRequest,
   createTenantInvitation,
   DEFAULT_SUBSCRIPTION_PLANS,
   DEFAULT_ZACMA_TENANT_ID,
   ProvisionInstituteResult,
   provisionTrainingInstitute,
   reactivateTenant,
+  rejectInstituteRegistrationRequest,
   suspendTenant,
   updateTenantBySuperAdmin,
   updateTenantLimits,
@@ -40,6 +44,7 @@ import {
   BillingCycle,
   formatDateShort,
   formatEtbCompact,
+  InstituteRegistrationRequest,
   PaymentMethod,
   SaasModuleCode,
   SuperAdminNavSection,
@@ -155,6 +160,8 @@ export function AddTrainingInstituteView({
       setExpiresAt(addDaysIso(startDate, trialDays || 14));
     } else if (cycle === 'ANNUAL') {
       setExpiresAt(addDaysIso(startDate, 365));
+    } else if (cycle === 'QUARTERLY') {
+      setExpiresAt(addDaysIso(startDate, 90));
     } else {
       setExpiresAt(addDaysIso(startDate, 30));
     }
@@ -171,8 +178,8 @@ export function AddTrainingInstituteView({
       .replace(/[^A-Z0-9]/g, '')
       .slice(0, 4);
     if (initials && studentIdPrefix === 'STU') {
-      setStudentIdPrefix(`${initials}-STU`);
-      setStaffIdPrefix(`${initials}-STA`);
+      setStudentIdPrefix(`${initials}STU`.slice(0, 8));
+      setStaffIdPrefix(`${initials}STA`.slice(0, 8));
       setReceiptPrefix(`${initials}-RCP`);
     }
     if (!shortName.trim()) {
@@ -804,6 +811,7 @@ export function AddTrainingInstituteView({
             >
               <option value="TRIAL">Free Trial</option>
               <option value="MONTHLY">Monthly Billing</option>
+              <option value="QUARTERLY">Quarterly Billing (90 days)</option>
               <option value="ANNUAL">Annual Billing</option>
               <option value="CUSTOM">Custom Contract</option>
             </select>
@@ -966,6 +974,7 @@ export function AllInstitutesView({
     platformSubscriptions,
     platformPayments,
     tenantInvitations,
+    registrationRequests,
     allPlatformStudents,
     allPlatformStaffRecords,
     allPlatformPayments,
@@ -978,6 +987,11 @@ export function AllInstitutesView({
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [selectedTenant, setSelectedTenant] = useState<TenantRecord | null>(null);
   const [drawerTab, setDrawerTab] = useState<'overview' | 'edit' | 'limits' | 'modules' | 'admin' | 'logs'>('overview');
+
+  // Public Registration Approval / Rejection State
+  const [approvingReqId, setApprovingReqId] = useState<string | null>(null);
+  const [rejectReqTarget, setRejectReqTarget] = useState<InstituteRegistrationRequest | null>(null);
+  const [rejectReqReason, setRejectReqReason] = useState('');
 
   // Support Access Modal
   const [supportTarget, setSupportTarget] = useState<TenantRecord | null>(null);
@@ -1010,6 +1024,60 @@ export function AllInstitutesView({
   const [newInviteEmail, setNewInviteEmail] = useState('');
   const [generatedInviteUrl, setGeneratedInviteUrl] = useState('');
   const [busy, setBusy] = useState(false);
+
+  const pendingRegistrations = useMemo(
+    () => registrationRequests.filter((r) => r.status === 'PENDING'),
+    [registrationRequests]
+  );
+
+  const handleApproveRegistration = async (req: InstituteRegistrationRequest) => {
+    if (!profile || !platformRole) return;
+    setApprovingReqId(req.id);
+    try {
+      const plans = subscriptionPlans.length > 0 ? subscriptionPlans : DEFAULT_SUBSCRIPTION_PLANS;
+      const provisioned = await approveInstituteRegistrationRequest(req, plans, {
+        uid: profile.uid,
+        fullName: profile.fullName,
+        role: profile.role,
+        platformRole,
+      });
+      pushToast(
+        'success',
+        `Approved & provisioned ${req.instituteName} (${provisioned.tenantId}). Primary Admin access is now live!`
+      );
+    } catch (err) {
+      pushToast(
+        'error',
+        err instanceof Error ? err.message : 'Unable to approve institute registration.'
+      );
+    } finally {
+      setApprovingReqId(null);
+    }
+  };
+
+  const handleConfirmRejectRegistration = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectReqTarget || !profile || !platformRole) return;
+    setBusy(true);
+    try {
+      await rejectInstituteRegistrationRequest(rejectReqTarget, rejectReqReason, {
+        uid: profile.uid,
+        fullName: profile.fullName,
+        role: profile.role,
+        platformRole,
+      });
+      pushToast('info', `Declined registration request for ${rejectReqTarget.instituteName}.`);
+      setRejectReqTarget(null);
+      setRejectReqReason('');
+    } catch (err) {
+      pushToast(
+        'error',
+        err instanceof Error ? err.message : 'Unable to reject registration request.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const filteredTenants = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1232,6 +1300,82 @@ export function AllInstitutesView({
         </button>
       </div>
 
+      {/* Pending Public Institute Registration Queue */}
+      {pendingRegistrations.length > 0 && (
+        <div className="bg-amber-50/70 border border-amber-300 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 bg-amber-100/70 border-b border-amber-200 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-amber-950">
+              <Clock className="w-4 h-4 text-amber-700" />
+              <span>
+                Pending Self-Service Institute Registration Applications ({pendingRegistrations.length})
+              </span>
+            </div>
+            <span className="text-[11px] text-amber-800">
+              Approve to auto-provision isolated workspace &amp; activate Admin account
+            </span>
+          </div>
+          <div className="divide-y divide-amber-200/70">
+            {pendingRegistrations.map((req) => (
+              <div
+                key={req.id}
+                className="p-4 bg-white/80 flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs"
+              >
+                <div className="flex items-start gap-3">
+                  {req.logoUrl ? (
+                    <img
+                      src={req.logoUrl}
+                      alt={req.instituteName}
+                      className="w-10 h-10 rounded-lg object-contain bg-white border border-slate-200 p-1 shrink-0"
+                    />
+                  ) : (
+                    <div
+                      className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-xs shrink-0"
+                      style={{ backgroundColor: req.primaryColor || '#172DEB' }}
+                    >
+                      {(req.shortName || req.instituteName).slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <div>
+                    <p className="font-bold text-slate-900">
+                      {req.instituteName}{' '}
+                      <span className="font-mono text-[11px] font-semibold text-[#172DEB] ml-1">
+                        /institute/{req.slug}
+                      </span>
+                    </p>
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      Admin: <strong>{req.adminFullName}</strong> ({req.adminEmail}) · {req.city},{' '}
+                      {req.country} · Plan: <strong>{req.selectedPlanName}</strong> ({req.billingCycle})
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={approvingReqId === req.id}
+                    onClick={() => void handleApproveRegistration(req)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-50 cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>{approvingReqId === req.id ? 'Provisioning...' : 'Approve & Provision'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRejectReqTarget(req);
+                      setRejectReqReason('');
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Reject</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="bg-white border border-slate-200 rounded-xl p-3.5 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
         <div className="relative flex-1">
@@ -1298,6 +1442,7 @@ export function AllInstitutesView({
                           <p className="font-bold text-slate-900">{t.name}</p>
                           <p className="text-[11px] font-mono text-slate-500">
                             {t.tenantId} · {t.city}
+                            {t.slug ? ` · /institute/${t.slug}` : ''}
                           </p>
                         </div>
                       </div>
@@ -1503,6 +1648,11 @@ export function AllInstitutesView({
                         <span className="text-slate-900">{activeDrawerTenant.currency} · {activeDrawerTenant.timezone}</span>
                         <span>Contact:</span>
                         <span className="text-slate-900">{activeDrawerTenant.email} · {activeDrawerTenant.phone}</span>
+                        <span>Portal URL:</span>
+                        <span className="font-mono text-[#172DEB] flex items-center gap-1.5">
+                          <Globe className="w-3.5 h-3.5 shrink-0" />
+                          <span>/institute/{activeDrawerTenant.slug || activeDrawerTenant.tenantId}</span>
+                        </span>
                         <span>Subscription Expires:</span>
                         <span className="text-slate-900">{formatDateShort(activeDrawerTenant.subscriptionExpiresAt)}</span>
                       </div>
@@ -1894,15 +2044,21 @@ export function AllInstitutesView({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Billing Cycle</label>
                   <select
                     value={upgradeCycle}
-                    onChange={(e) => {
+                      onChange={(e) => {
                       const c = e.target.value as BillingCycle;
                       setUpgradeCycle(c);
-                      setUpgradeExpiry(addDaysIso(todayIsoDate(), c === 'ANNUAL' ? 365 : c === 'TRIAL' ? 14 : 30));
+                      setUpgradeExpiry(
+                        addDaysIso(
+                          todayIsoDate(),
+                          c === 'ANNUAL' ? 365 : c === 'QUARTERLY' ? 90 : c === 'TRIAL' ? 14 : 30
+                        )
+                      );
                     }}
                     className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
                   >
-                    <option value="MONTHLY">Monthly</option>
-                    <option value="ANNUAL">Annual</option>
+                    <option value="MONTHLY">Monthly (30 days)</option>
+                    <option value="QUARTERLY">Quarterly (90 days)</option>
+                    <option value="ANNUAL">Annual (365 days)</option>
                     <option value="TRIAL">Trial Extension</option>
                     <option value="CUSTOM">Custom</option>
                   </select>
@@ -1948,6 +2104,52 @@ export function AllInstitutesView({
                 className="px-4 py-2 text-xs font-semibold text-white bg-[#0B2545] hover:bg-slate-800 rounded-lg"
               >
                 Save Subscription
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Reject Public Registration Request Modal */}
+      {rejectReqTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+          <form
+            onSubmit={(e) => void handleConfirmRejectRegistration(e)}
+            className="bg-white rounded-xl border border-slate-200 shadow-xl w-full max-w-md p-5 space-y-4"
+          >
+            <h3 className="text-sm font-bold text-red-700">
+              Reject Registration — {rejectReqTarget.instituteName}
+            </h3>
+            <p className="text-xs text-slate-600">
+              Provide a clear reason for declining this application. The applicant will see this status on their onboarding screen.
+            </p>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Rejection Reason *
+              </label>
+              <textarea
+                required
+                rows={3}
+                value={rejectReqReason}
+                onChange={(e) => setRejectReqReason(e.target.value)}
+                placeholder="e.g., Incomplete accreditation details or duplicate application"
+                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRejectReqTarget(null)}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={busy}
+                className="px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg"
+              >
+                Confirm Rejection
               </button>
             </div>
           </form>

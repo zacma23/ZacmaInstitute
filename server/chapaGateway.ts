@@ -132,6 +132,12 @@ export function handleChapaStatus(origin?: string): ChapaHttpResponse {
 }
 
 export interface ChapaInitializePayload {
+  purpose?: 'TUITION' | 'SUBSCRIPTION';
+  tenantId?: string;
+  tenantName?: string;
+  planId?: string;
+  planName?: string;
+  billingCycle?: string;
   studentId?: string;
   studentCode?: string;
   studentName?: string;
@@ -142,7 +148,7 @@ export interface ChapaInitializePayload {
   enrollmentId?: string;
   amountEtb?: number;
   currency?: string;
-  source?: 'STUDENT_PORTAL' | 'PAYMENT_LINK';
+  source?: 'STUDENT_PORTAL' | 'PAYMENT_LINK' | 'SUBSCRIPTION_PORTAL';
   returnBaseUrl?: string;
   txRef?: string;
 }
@@ -194,17 +200,26 @@ export async function handleChapaInitialize(
     };
   }
 
-  const studentId = String(body.studentId || '').trim();
-  const studentCode = String(body.studentCode || '').trim();
-  const studentName = String(body.studentName || '').trim();
-  const courseName = String(body.courseName || 'Training Course').trim();
+  const isSubscription = body.purpose === 'SUBSCRIPTION';
+  const studentId = String(body.studentId || (isSubscription ? body.tenantId : '') || '').trim();
+  const studentCode = String(
+    body.studentCode || (isSubscription ? (body.tenantId || 'SUB').slice(0, 12).toUpperCase() : '')
+  ).trim();
+  const studentName = String(body.studentName || (isSubscription ? body.tenantName : '') || '').trim();
+  const courseName = String(
+    body.courseName || (isSubscription ? `${body.planName || 'SaaS'} ${body.billingCycle || 'MONTHLY'}` : 'Training Course')
+  ).trim();
   const amountEtb = Number(body.amountEtb);
   const currency = String(body.currency || 'ETB').trim().toUpperCase();
 
   if (!studentId || !studentCode || !studentName) {
     return {
       status: 400,
-      body: { error: 'Student ID, Student Code, and Student Name are required to initialize Chapa payment.' },
+      body: {
+        error: isSubscription
+          ? 'Tenant ID and institute name are required to initialize ZIMS subscription payment.'
+          : 'Student ID, Student Code, and Student Name are required to initialize Chapa payment.',
+      },
     };
   }
   if (!Number.isFinite(amountEtb) || amountEtb <= 0) {
@@ -216,13 +231,15 @@ export async function handleChapaInitialize(
   if (currency !== 'ETB') {
     return {
       status: 400,
-      body: { error: 'Only ETB currency is supported for ZACMA Technology student fee payments.' },
+      body: { error: 'Only ETB currency is supported for Chapa payments.' },
     };
   }
 
   const txRef =
     body.txRef && /^[A-Za-z0-9\-_]{8,64}$/.test(body.txRef.trim())
       ? body.txRef.trim()
+      : isSubscription
+      ? `ZIMS-SUB-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`
       : generateChapaTxRef(studentCode);
 
   const safeOrigin = (body.returnBaseUrl || requestOrigin || process.env.APP_URL || 'http://localhost:3000').replace(
@@ -230,7 +247,9 @@ export async function handleChapaInitialize(
     ''
   );
   const callbackUrl = `${safeOrigin}/api/chapa/webhook`;
-  const returnUrl = `${safeOrigin}/?chapa_tx_ref=${encodeURIComponent(txRef)}`;
+  const returnUrl = isSubscription
+    ? `${safeOrigin}/?chapa_sub_tx_ref=${encodeURIComponent(txRef)}`
+    : `${safeOrigin}/?chapa_tx_ref=${encodeURIComponent(txRef)}`;
 
   const { firstName, lastName } = splitStudentName(studentName);
   const fallbackEmail = `${studentCode.toLowerCase().replace(/[^a-z0-9]/g, '') || 'student'}@students.zacma.edu.et`;
@@ -250,15 +269,22 @@ export async function handleChapaInitialize(
     callback_url: callbackUrl,
     return_url: returnUrl,
     customization: {
-      title: sanitizeCustomizationText('ZACMA Tech Fee', 16),
-      description: sanitizeCustomizationText(`${studentCode} ${courseName}`, 80),
+      title: sanitizeCustomizationText(isSubscription ? 'ZIMS SaaS Plan' : 'ZACMA Tech Fee', 16),
+      description: sanitizeCustomizationText(
+        isSubscription ? `${body.tenantName || studentName} ${courseName}` : `${studentCode} ${courseName}`,
+        80
+      ),
     },
     meta: {
+      purpose: isSubscription ? 'SUBSCRIPTION' : 'TUITION',
+      tenantId: body.tenantId || '',
+      planId: body.planId || '',
+      billingCycle: body.billingCycle || '',
       studentId,
       studentCode,
       courseId: body.courseId || '',
       enrollmentId: body.enrollmentId || '',
-      source: body.source || 'STUDENT_PORTAL',
+      source: body.source || (isSubscription ? 'SUBSCRIPTION_PORTAL' : 'STUDENT_PORTAL'),
     },
   };
   if (phoneNumber) {

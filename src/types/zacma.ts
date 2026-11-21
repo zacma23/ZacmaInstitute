@@ -48,7 +48,7 @@ export type SuperAdminNavSection =
   | 'sa_support';
 
 export type TenantStatus = 'ACTIVE' | 'TRIAL' | 'SUSPENDED' | 'PENDING' | 'EXPIRED';
-export type BillingCycle = 'MONTHLY' | 'ANNUAL' | 'TRIAL' | 'CUSTOM';
+export type BillingCycle = 'MONTHLY' | 'QUARTERLY' | 'ANNUAL' | 'TRIAL' | 'CUSTOM';
 
 export type PaymentPlanCode =
   | 'FULL'
@@ -102,6 +102,7 @@ export type NavSection =
   | 'registrations'
   | 'students'
   | 'courses'
+  | 'documents'
   | 'payments'
   | 'chapa'
   | 'reminders'
@@ -220,6 +221,8 @@ export interface Course {
   code: string;
   name: string;
   category: string;
+  departmentId?: string;
+  departmentName?: string;
   durationWeeks: number;
   feeEtb: number;
   schedule: string;
@@ -227,6 +230,71 @@ export interface Course {
   instructorName?: string;
   description?: string;
   isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Department {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  headName?: string;
+  description?: string;
+  isActive: boolean;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ClassBatchStatus = 'UPCOMING' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED';
+
+export interface ClassBatch {
+  id: string;
+  tenantId: string;
+  batchCode: string;
+  name: string;
+  courseId: string;
+  courseName: string;
+  departmentId?: string;
+  departmentName?: string;
+  instructorId?: string;
+  instructorName?: string;
+  room?: string;
+  schedule: string;
+  startDate: string;
+  endDate: string;
+  capacity: number;
+  status: ClassBatchStatus;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type InstituteDocumentCategory =
+  | 'SYLLABUS'
+  | 'POLICY'
+  | 'HANDBOOK'
+  | 'CERTIFICATE_TEMPLATE'
+  | 'FEE_SCHEDULE'
+  | 'FORM'
+  | 'OTHER';
+
+export interface InstituteDocument {
+  id: string;
+  tenantId: string;
+  title: string;
+  category: InstituteDocumentCategory;
+  description?: string;
+  fileName: string;
+  fileMimeType: string;
+  fileSizeBytes: number;
+  fileDataUrl: string;
+  visibility: 'ALL_STAFF' | 'ADMIN_ONLY' | 'STUDENTS_AND_STAFF';
+  departmentName?: string;
+  courseName?: string;
+  uploadedBy: string;
+  uploadedByName: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -826,6 +894,7 @@ export interface TenantRecord {
   planName: string;
   billingCycle: BillingCycle;
   monthlyPriceEtb: number;
+  quarterlyPriceEtb?: number;
   annualPriceEtb: number;
   studentLimit: number;
   staffLimit: number;
@@ -859,6 +928,7 @@ export interface SubscriptionPlan {
   name: string;
   tagline: string;
   monthlyPriceEtb: number;
+  quarterlyPriceEtb?: number;
   annualPriceEtb: number;
   trialDays: number;
   studentLimit: number;
@@ -979,6 +1049,7 @@ export interface PlatformGlobalSettings {
   gracePeriodDays: number;
   autoSuspendExpiredDays: number;
   allowSelfSignupInstitutes: boolean;
+  autoApproveInstituteRegistrations?: boolean;
   enforceSupportSessionReason: boolean;
   maxSupportSessionMinutes: number;
   defaultAiModel?: AiModelId;
@@ -986,6 +1057,56 @@ export interface PlatformGlobalSettings {
   aiDocScanLimit?: number;
   updatedBy?: string;
   updatedByName?: string;
+  updatedAt: string;
+}
+
+export interface InstituteRegistrationRequest {
+  id: string;
+  instituteName: string;
+  shortName: string;
+  slug: string;
+  businessType: string;
+  email: string;
+  phone: string;
+  country: string;
+  city: string;
+  address: string;
+  website?: string;
+  logoUrl?: string;
+  primaryColor: string;
+  secondaryColor: string;
+  currency: 'ETB' | 'USD' | 'KES' | 'EUR' | 'GBP';
+  selectedPlanId: string;
+  selectedPlanCode: string;
+  selectedPlanName: string;
+  billingCycle: BillingCycle;
+  adminFullName: string;
+  adminEmail: string;
+  adminPhone: string;
+  adminPosition: string;
+  applicantUid: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  provisionedTenantId?: string;
+  rejectionReason?: string;
+  reviewedBy?: string;
+  reviewedByName?: string;
+  reviewedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlatformAnnouncement {
+  id: string;
+  title: string;
+  message: string;
+  severity: 'INFO' | 'WARNING' | 'SUCCESS' | 'CRITICAL';
+  targetAudience: 'ALL_INSTITUTES' | 'TRIAL_INSTITUTES' | 'ACTIVE_INSTITUTES' | 'SPECIFIC_TENANT';
+  targetTenantId?: string;
+  isActive: boolean;
+  expiresAt?: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
   updatedAt: string;
 }
 
