@@ -274,7 +274,18 @@ export function AddTrainingInstituteView({
       setProvisioned(res);
       pushToast('success', `Training institute "${name}" provisioned successfully (${res.tenantId}).`);
     } catch (err) {
-      pushToast('error', err instanceof Error ? err.message : 'Provisioning failed.');
+      let message = err instanceof Error ? err.message : 'Provisioning failed.';
+      try {
+        const parsed = JSON.parse(message) as { error?: string; path?: string; operationType?: string };
+        if (parsed && typeof parsed.error === 'string') {
+          message = parsed.path
+            ? `${parsed.error} (Operation: ${parsed.operationType || 'create'} on ${parsed.path})`
+            : parsed.error;
+        }
+      } catch {
+        // Already plain text
+      }
+      pushToast('error', message);
     } finally {
       setSubmitting(false);
     }

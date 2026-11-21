@@ -833,6 +833,115 @@ export async function authorizeAiRequest(params: {
   });
 }
 
+export interface PlatformAdminAuthSuccess {
+  ok: true;
+  uid: string;
+  email: string;
+  fullName: string;
+  role: RoleCode;
+  platformRole: PlatformRole;
+  tenantId: string;
+  profileVerifiedInDb: boolean;
+}
+
+/**
+ * Backend authorization check for privileged ZACMA SaaS platform actions
+ * (such as provisioning new training institutes).
+ * Verifies:
+ * 1. Cryptographic Firebase Auth RS256 ID token + UID
+ * 2. Authoritative Firestore profiles/{uid} document
+ * 3. Active status + database-backed SUPER_ADMIN or PLATFORM_ADMIN role
+ *    (does not rely on email alone unless the verified bootstrap owner's profile is still syncing).
+ */
+export async function verifyPlatformAdminAuthorization(
+  authHeader?: string
+): Promise<PlatformAdminAuthSuccess | AiAuthRejection> {
+  const tokenResult = await verifyFirebaseIdToken(authHeader);
+  if (!tokenResult.ok) {
+    return {
+      ok: false,
+      status: 401,
+      code: 'AUTH_REQUIRED',
+      error: tokenResult.error,
+    };
+  }
+
+  const { token, rawJwt } = tokenResult;
+  let rawProfile: Record<string, unknown> | null = null;
+  try {
+    rawProfile = await fetchFirestoreDocument('profiles', token.uid, rawJwt);
+  } catch (err) {
+    console.error('Platform admin Firestore verification error:', err);
+    return {
+      ok: false,
+      status: 503,
+      code: 'PROFILE_VERIFICATION_UNAVAILABLE',
+      error: 'Unable to verify Super Admin profile against Firestore. Please retry.',
+    };
+  }
+
+  const isVerifiedBootstrapOwner =
+    token.emailVerified &&
+    typeof token.email === 'string' &&
+    token.email.toLowerCase() === BOOTSTRAP_SUPER_ADMIN_EMAIL;
+
+  if (!rawProfile) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'PROFILE_NOT_FOUND',
+      error: 'No active user profile found in Firestore for the authenticated UID.',
+    };
+  }
+
+  if (rawProfile.isActive === false) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'ACCOUNT_INACTIVE',
+      error: 'This administrator account is currently deactivated.',
+    };
+  }
+
+  const dbPlatformRole = VALID_PLATFORM_ROLES.includes(rawProfile.platformRole as PlatformRole)
+    ? (rawProfile.platformRole as PlatformRole)
+    : undefined;
+
+  const effectivePlatformRole: PlatformRole | undefined =
+    dbPlatformRole === 'SUPER_ADMIN' || dbPlatformRole === 'PLATFORM_ADMIN'
+      ? dbPlatformRole
+      : isVerifiedBootstrapOwner
+      ? 'SUPER_ADMIN'
+      : undefined;
+
+  if (!effectivePlatformRole) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'SUPER_ADMIN_ROLE_REQUIRED',
+      error:
+        'Access denied: your Firestore user profile does not hold an authorized SUPER_ADMIN or PLATFORM_ADMIN role.',
+    };
+  }
+
+  const role: RoleCode = VALID_ROLE_CODES.includes(rawProfile.role as RoleCode)
+    ? (rawProfile.role as RoleCode)
+    : 'ADMIN';
+
+  return {
+    ok: true,
+    uid: token.uid,
+    email: String(rawProfile.email || token.email || ''),
+    fullName: String(rawProfile.fullName || token.name || 'ZACMA Super Admin'),
+    role,
+    platformRole: effectivePlatformRole,
+    tenantId: String(rawProfile.tenantId || 'zacma_default'),
+    profileVerifiedInDb: Boolean(
+      dbPlatformRole === 'SUPER_ADMIN' || dbPlatformRole === 'PLATFORM_ADMIN'
+    ),
+  };
+}
+
 /**
  * Executes all 10 mandatory multi-tenant & role-isolation security test scenarios
  * against the real backend authorization & context sanitization engine.

@@ -21,6 +21,7 @@ import {
   cropPortraitFromDocument,
   ID_DOCUMENT_LABELS,
 } from '../lib/registrationService';
+import { auth } from '../lib/firebase';
 import { IdDocumentType } from '../types/zacma';
 
 export type FieldConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW' | 'MISSING';
@@ -290,9 +291,14 @@ export function IdDocumentScanner({
     }, 2400);
 
     try {
+      const idToken = await auth.currentUser?.getIdToken().catch(() => null);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (idToken) {
+        headers.Authorization = `Bearer ${idToken}`;
+      }
       const res = await fetch('/api/ai/scan-id', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         credentials: 'include',
         body: JSON.stringify({
           registrationType,

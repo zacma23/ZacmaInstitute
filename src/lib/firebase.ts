@@ -1,6 +1,12 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
+import {
+  doc,
+  type Firestore,
+  getDocFromServer,
+  getFirestore,
+  initializeFirestore,
+} from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env || {};
@@ -32,10 +38,18 @@ export const isUsingCustomFirebaseEnv = usingCustomEnvFirebase;
 
 const app = initializeApp(resolvedFirebaseConfig);
 
-export const db =
-  resolvedDatabaseId && resolvedDatabaseId !== '(default)'
-    ? getFirestore(app, resolvedDatabaseId)
-    : getFirestore(app);
+function createResilientFirestore(): Firestore {
+  const useNamedDb = Boolean(resolvedDatabaseId && resolvedDatabaseId !== '(default)');
+  try {
+    return useNamedDb
+      ? initializeFirestore(app, { experimentalAutoDetectLongPolling: true }, resolvedDatabaseId)
+      : initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+  } catch {
+    return useNamedDb ? getFirestore(app, resolvedDatabaseId) : getFirestore(app);
+  }
+}
+
+export const db = createResilientFirestore();
 export const auth = getAuth(app);
 export const googleAuthProvider = new GoogleAuthProvider();
 googleAuthProvider.setCustomParameters({ prompt: 'select_account' });

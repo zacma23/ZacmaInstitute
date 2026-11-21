@@ -476,26 +476,41 @@ export async function ensureCanonicalZacmaCourses(
   actor: ActorContext
 ): Promise<number> {
   if (actor.role !== 'ADMIN') return 0;
+  const tenantId = actor.tenantId || 'zacma_default';
   const existingNames = new Set(existingCourses.map((c) => c.name.trim().toLowerCase()));
   const existingIds = new Set(existingCourses.map((c) => c.id));
-  const missing = CANONICAL_ZACMA_COURSES.filter(
-    (c) => !existingIds.has(c.id) && !existingNames.has(c.name.trim().toLowerCase())
-  );
-  if (missing.length === 0) return 0;
 
-  const now = new Date().toISOString();
   try {
+    // Authoritatively check live Firestore courses so startup sync never attempts to overwrite
+    // already-existing docs (which would fail immutable createdAt security rules).
+    const liveSnap = await getDocs(collection(db, 'courses'));
+    liveSnap.docs.forEach((d) => {
+      existingIds.add(d.id);
+      const data = d.data() as { name?: string };
+      if (typeof data.name === 'string' && data.name.trim()) {
+        existingNames.add(data.name.trim().toLowerCase());
+      }
+    });
+
+    const missing = CANONICAL_ZACMA_COURSES.filter(
+      (c) => !existingIds.has(c.id) && !existingNames.has(c.name.trim().toLowerCase())
+    );
+    if (missing.length === 0) return 0;
+
+    const now = new Date().toISOString();
     const batch = writeBatch(db);
     for (const c of missing) {
       const { id, ...data } = c;
       batch.set(doc(db, 'courses', id), {
         ...data,
+        tenantId,
         isActive: true,
         createdAt: now,
         updatedAt: now,
       });
     }
     batch.set(doc(db, 'audit_logs', makeId('aud_crs_sync')), {
+      tenantId,
       actorId: actor.uid,
       actorName: actor.fullName.slice(0, 120),
       actorRole: actor.role,

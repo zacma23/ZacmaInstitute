@@ -9,7 +9,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import {
   addDaysIso,
   AuditLog,
@@ -407,11 +407,138 @@ function cleanObject<T extends Record<string, unknown>>(obj: T): Record<string, 
   return out;
 }
 
+/**
+ * Guarantees a prefix strictly matching Firestore rules: `^[A-Z0-9]{2,10}$`.
+ */
+export function sanitizeCodePrefix(raw: string | undefined, fallback = 'INS'): string {
+  const cleaned = (raw || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 10);
+  if (cleaned.length >= 2) return cleaned;
+  const cleanFallback = fallback
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 10);
+  if (cleaned.length === 1) {
+    return `${cleaned}${cleanFallback.slice(0, 3) || 'IN'}`.slice(0, 10);
+  }
+  return cleanFallback.length >= 2 ? cleanFallback : 'INS';
+}
+
+function sanitizeRequiredString(raw: string | undefined, fallback: string, maxLen: number): string {
+  const cleaned = (raw || '').trim();
+  return (cleaned || fallback).slice(0, maxLen);
+}
+
+function sanitizePhone(raw: string | undefined, fallback = '+251 000 000 000'): string {
+  const cleaned = (raw || '').trim();
+  return (cleaned || fallback).slice(0, 30);
+}
+
+function sanitizeIsoDate(raw: string | undefined, fallback: string): string {
+  const cleaned = (raw || '').trim();
+  return (cleaned || fallback).slice(0, 20);
+}
+
+function sanitizeNonNegNumber(raw: unknown, fallback = 0): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function sanitizePositiveInt(raw: unknown, fallback: number, min = 1): number {
+  const n = Math.round(Number(raw));
+  return Number.isFinite(n) && n >= min ? n : fallback;
+}
+
 export interface PlatformActor {
   uid: string;
   fullName: string;
   role: RoleCode;
   platformRole?: PlatformRole;
+}
+
+/**
+ * Verifies the authenticated user's Firebase ID token and database-backed Super Admin /
+ * Platform Admin role on the backend BEFORE executing privileged institute provisioning writes.
+ */
+async function verifySuperAdminBeforeProvisioning(actor: PlatformActor): Promise<PlatformActor> {
+  if (actor.platformRole !== 'SUPER_ADMIN' && actor.platformRole !== 'PLATFORM_ADMIN') {
+    throw new Error('Only Platform Administrators can register and provision new training institutes.');
+  }
+
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error('Your authentication session has expired. Please sign in again.');
+  }
+  if (currentUser.uid !== actor.uid) {
+    throw new Error('Authenticated user identity mismatch. Please refresh and sign in again.');
+  }
+
+  // Ensure the Super Admin's database-backed profile exists with platformRole persisted
+  let idToken: string | null = null;
+  try {
+    idToken = await currentUser.getIdToken();
+  } catch {
+    idToken = null;
+  }
+
+  if (idToken && typeof fetch === 'function') {
+    try {
+      const res = await fetch('/api/saas/verify-super-admin', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+      });
+      if (res.status === 401 || res.status === 403) {
+        const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(
+          errBody.error ||
+            'Backend Super Admin authorization rejected: your account does not hold an active SUPER_ADMIN or PLATFORM_ADMIN role.'
+        );
+      }
+      if (res.ok) {
+        const verified = (await res.json()) as {
+          authorized?: boolean;
+          uid?: string;
+          fullName?: string;
+          role?: RoleCode;
+          platformRole?: PlatformRole;
+        };
+        if (verified.authorized && verified.uid === currentUser.uid) {
+          return {
+            uid: verified.uid,
+            fullName: sanitizeRequiredString(verified.fullName || actor.fullName, 'ZACMA Super Admin', 120),
+            role: verified.role || actor.role,
+            platformRole: verified.platformRole || actor.platformRole,
+          };
+        }
+      }
+    } catch (err) {
+      // Propagate explicit 401/403 authorization rejections immediately
+      if (
+        err instanceof Error &&
+        (err.message.includes('authorization') ||
+          err.message.includes('Access denied') ||
+          err.message.includes('SUPER_ADMIN') ||
+          err.message.includes('expired') ||
+          err.message.includes('deactivated'))
+      ) {
+        throw err;
+      }
+      // If local API is transiently unreachable, Firestore security rules still enforce DB-backed RBAC
+      console.warn('Backend Super Admin pre-check skipped due to network error; Firestore rules remain enforced:', err);
+    }
+  }
+
+  return {
+    ...actor,
+    fullName: sanitizeRequiredString(actor.fullName, 'ZACMA Super Admin', 120),
+  };
 }
 
 /**
@@ -636,174 +763,219 @@ export async function provisionTrainingInstitute(
   input: ProvisionInstituteInput,
   actor: PlatformActor
 ): Promise<ProvisionInstituteResult> {
-  if (actor.platformRole !== 'SUPER_ADMIN' && actor.platformRole !== 'PLATFORM_ADMIN') {
-    throw new Error('Only Platform Administrators can register and provision new training institutes.');
-  }
+  // 1. Verify authenticated UID + database-backed Super Admin role on backend before writing
+  const verifiedActor = await verifySuperAdminBeforeProvisioning(actor);
 
   const now = new Date().toISOString();
-  const slug = makeSlug(input.shortName || input.name);
-  const rand4 = Math.random().toString(36).slice(2, 6);
-  const tenantId = `inst_${slug.replace(/-/g, '_')}_${rand4}`;
+  const today = todayIsoDate();
+  const safeName = sanitizeRequiredString(input.name, 'Training Institute', 140);
+  const safeShortName = sanitizeRequiredString(input.shortName, safeName.slice(0, 28), 40);
+  const slug = makeSlug(safeShortName || safeName);
+  const rand4 = Math.random().toString(36).slice(2, 6).padEnd(4, '0');
+  const tenantId = `inst_${slug.replace(/-/g, '_')}_${rand4}`.slice(0, 72);
   const subId = `sub_${tenantId}`;
   const inviteId = makeId('inv');
   const inviteToken = makeInviteToken();
 
+  const safeStartDate = sanitizeIsoDate(input.subscriptionStartDate, today);
   const isTrial = input.billingCycle === 'TRIAL' || input.planCode === 'FREE_TRIAL';
   const tenantStatus: TenantStatus = isTrial ? 'TRIAL' : 'ACTIVE';
-  const trialEndsAt = isTrial
-    ? addDaysIso(input.subscriptionStartDate, Math.max(1, input.trialDays || 14))
-    : undefined;
-  const effectivePrice =
-    isTrial
-      ? 0
-      : input.billingCycle === 'ANNUAL'
-      ? Number(input.annualPriceEtb || 0)
-      : input.billingCycle === 'QUARTERLY'
-      ? Number(input.quarterlyPriceEtb ?? Math.round(Number(input.monthlyPriceEtb || 0) * 2.7))
-      : Number(input.monthlyPriceEtb || 0);
+  const safeTrialDays = sanitizePositiveInt(input.trialDays, 14, 1);
+  const trialEndsAt = isTrial ? addDaysIso(safeStartDate, safeTrialDays) : undefined;
+  const defaultExpiry = isTrial
+    ? trialEndsAt || addDaysIso(safeStartDate, 14)
+    : input.billingCycle === 'ANNUAL'
+    ? addDaysIso(safeStartDate, 365)
+    : input.billingCycle === 'QUARTERLY'
+    ? addDaysIso(safeStartDate, 90)
+    : addDaysIso(safeStartDate, 30);
+  const safeExpiresAt = sanitizeIsoDate(input.subscriptionExpiresAt, defaultExpiry);
 
-  const cleanStuPrefix =
-    input.studentIdPrefix
-      .trim()
-      .toUpperCase()
-      .replace(/[^A-Z0-9]/g, '')
-      .slice(0, 10) || slug.replace(/[^a-z0-9]/g, '').slice(0, 4).toUpperCase() || 'INS';
-  const cleanStfPrefix =
-    input.staffIdPrefix
-      .trim()
-      .toUpperCase()
-      .replace(/[^A-Z0-9]/g, '')
-      .slice(0, 10) || cleanStuPrefix;
-  const cleanRcpPrefix =
-    input.receiptPrefix
+  const safeMonthlyPrice = sanitizeNonNegNumber(input.monthlyPriceEtb, 0);
+  const safeQuarterlyPrice = sanitizeNonNegNumber(
+    input.quarterlyPriceEtb ?? Math.round(safeMonthlyPrice * 2.7),
+    0
+  );
+  const safeAnnualPrice = sanitizeNonNegNumber(input.annualPriceEtb, 0);
+  const effectivePrice = isTrial
+    ? 0
+    : input.billingCycle === 'ANNUAL'
+    ? safeAnnualPrice
+    : input.billingCycle === 'QUARTERLY'
+    ? safeQuarterlyPrice
+    : safeMonthlyPrice;
+
+  const slugFallbackPrefix = slug.replace(/[^a-z0-9]/g, '').slice(0, 4).toUpperCase() || 'INS';
+  const cleanStuPrefix = sanitizeCodePrefix(input.studentIdPrefix, slugFallbackPrefix);
+  const cleanStfPrefix = sanitizeCodePrefix(input.staffIdPrefix, cleanStuPrefix);
+  const cleanRcpPrefix = (
+    (input.receiptPrefix || '')
       .trim()
       .toUpperCase()
       .replace(/[^A-Z0-9-]/g, '')
-      .slice(0, 14) || `${cleanStuPrefix}-RCP`;
+      .slice(0, 14) || `${cleanStuPrefix}-RCP`
+  ).slice(0, 16);
 
+  const safeCountry = sanitizeRequiredString(input.country, 'Ethiopia', 80);
+  const safeCity = sanitizeRequiredString(input.city, 'Addis Ababa', 80);
+  const safeAddress = sanitizeRequiredString(input.address, `${safeCity}, ${safeCountry}`, 240);
+  const safeEmail = sanitizeRequiredString(input.email?.toLowerCase(), 'info@institute.edu.et', 160);
+  const safePhone = sanitizePhone(input.phone);
+  const safeAdminName = sanitizeRequiredString(input.primaryAdminName, 'Institute Administrator', 120);
+  const safeAdminEmailRaw = sanitizeRequiredString(input.primaryAdminEmail, safeEmail, 160);
+  const safeAdminEmailLower = safeAdminEmailRaw.toLowerCase().slice(0, 160);
+  const safeAdminPhone = sanitizePhone(input.primaryAdminPhone, safePhone);
+  const safeAdminPosition = sanitizeRequiredString(input.primaryAdminPosition, 'Institute Administrator', 80);
+  const safePlanId = sanitizeRequiredString(input.planId, 'plan_custom', 80);
+  const safePlanCode = sanitizeRequiredString(input.planCode, 'CUSTOM', 40);
+  const safePlanName = sanitizeRequiredString(input.planName, 'Custom Plan', 80);
+  const safeCurrency = (['ETB', 'USD', 'KES', 'EUR', 'GBP'] as const).includes(input.currency)
+    ? input.currency
+    : 'ETB';
+  const safePaymentMethods: PaymentMethod[] =
+    Array.isArray(input.paymentMethods) && input.paymentMethods.length > 0
+      ? input.paymentMethods.slice(0, 10)
+      : ['Cash', 'Bank Transfer', 'Telebirr', 'Chapa'];
+  const safeEnabledModules: SaasModuleCode[] = Array.isArray(input.enabledModules)
+    ? input.enabledModules.slice(0, 20)
+    : ALL_SAAS_MODULE_CODES.slice(0, 20);
+
+  // 2. Build Tenant Master Document (strictly matching isValidTenant in firestore.rules)
+  const tenantDoc: Omit<TenantRecord, 'id'> = {
+    tenantId,
+    name: safeName,
+    shortName: safeShortName,
+    slug: slug.slice(0, 80),
+    businessType: sanitizeRequiredString(input.businessType, 'Training Institute', 80),
+    email: safeEmail,
+    phone: safePhone,
+    country: safeCountry,
+    city: safeCity,
+    address: safeAddress,
+    website: input.website?.trim().slice(0, 200),
+    logoUrl: input.logoUrl?.slice(0, 90000),
+    primaryColor: sanitizeRequiredString(input.primaryColor, '#0B2545', 20),
+    secondaryColor: sanitizeRequiredString(input.secondaryColor, '#D97706', 20),
+    studentIdPrefix: cleanStuPrefix,
+    staffIdPrefix: cleanStfPrefix,
+    receiptPrefix: cleanRcpPrefix,
+    currency: safeCurrency,
+    timezone: sanitizeRequiredString(input.timezone, 'Africa/Addis_Ababa', 60),
+    academicYear: sanitizeRequiredString(
+      input.academicYear,
+      `${new Date().getFullYear()}/${new Date().getFullYear() + 1}`,
+      30
+    ),
+    paymentMethods: safePaymentMethods,
+    defaultLanguage: sanitizeRequiredString(input.defaultLanguage, 'English (Ethiopia)', 40),
+    dateFormat: input.dateFormat || 'GREGORIAN_AND_ETHIOPIAN',
+    invoiceFooterNote: sanitizeRequiredString(
+      input.invoiceFooterNote,
+      `Official financial document issued by ${safeName}.`,
+      300
+    ),
+    notificationEmailEnabled: Boolean(input.notificationEmailEnabled),
+    notificationSmsEnabled: Boolean(input.notificationSmsEnabled),
+    notificationWhatsappEnabled: Boolean(input.notificationWhatsappEnabled),
+    emailGatewayStatus: input.notificationEmailEnabled ? 'CONFIGURED' : 'UNCONFIGURED',
+    smsGatewayStatus: input.notificationSmsEnabled ? 'CONFIGURED' : 'UNCONFIGURED',
+    whatsappGatewayStatus: input.notificationWhatsappEnabled ? 'CONFIGURED' : 'UNCONFIGURED',
+    smsSenderLabel: cleanStuPrefix.slice(0, 30),
+    status: tenantStatus,
+    planId: safePlanId,
+    planCode: safePlanCode,
+    planName: safePlanName,
+    billingCycle: input.billingCycle,
+    monthlyPriceEtb: safeMonthlyPrice,
+    quarterlyPriceEtb: safeQuarterlyPrice,
+    annualPriceEtb: safeAnnualPrice,
+    studentLimit: sanitizePositiveInt(input.studentLimit, 100, 1),
+    staffLimit: sanitizePositiveInt(input.staffLimit, 20, 1),
+    storageLimitMb: sanitizePositiveInt(input.storageLimitMb, 2048, 128),
+    storageUsedMb: 0,
+    aiMonthlyQuota: sanitizeNonNegNumber(input.aiMonthlyQuota, 0),
+    aiRequestsUsed: 0,
+    enabledModules: safeEnabledModules,
+    primaryAdminUid: input.primaryAdminUid?.trim().slice(0, 128),
+    primaryAdminName: safeAdminName,
+    primaryAdminEmail: safeAdminEmailLower,
+    primaryAdminPhone: safeAdminPhone,
+    primaryAdminPosition: safeAdminPosition,
+    subscriptionStartDate: safeStartDate,
+    trialEndsAt,
+    subscriptionExpiresAt: safeExpiresAt,
+    isDefaultPlatformTenant: false,
+    createdBy: verifiedActor.uid,
+    createdByName: verifiedActor.fullName.slice(0, 120),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  let invoiceNumber: string | undefined;
+
+  // Phase 1: Atomic Core Provisioning Batch (Tenant + Subscription + Billing + Admin Invitation)
+  // Keeping core provisioning in a dedicated small batch avoids hitting Firestore's 20 get()/exists()
+  // security-rule budget per batch and ensures exact failure diagnostics.
   try {
-    const batch = writeBatch(db);
+    const coreBatch = writeBatch(db);
+    coreBatch.set(doc(db, 'tenants', tenantId), cleanObject(tenantDoc));
 
-    // 1. Tenant Master Document
-    const tenantDoc: Omit<TenantRecord, 'id'> = {
-      tenantId,
-      name: input.name.trim().slice(0, 140),
-      shortName: (input.shortName.trim() || input.name.trim().slice(0, 28)).slice(0, 48),
-      slug,
-      businessType: input.businessType.trim().slice(0, 80) || 'Training Institute',
-      email: input.email.trim().toLowerCase().slice(0, 160),
-      phone: input.phone.trim().slice(0, 32),
-      country: input.country.trim().slice(0, 80) || 'Ethiopia',
-      city: input.city.trim().slice(0, 80) || 'Addis Ababa',
-      address: input.address.trim().slice(0, 240),
-      website: input.website?.trim().slice(0, 200),
-      logoUrl: input.logoUrl?.slice(0, 90000),
-      primaryColor: input.primaryColor || '#0B2545',
-      secondaryColor: input.secondaryColor || '#D97706',
-      studentIdPrefix: cleanStuPrefix,
-      staffIdPrefix: cleanStfPrefix,
-      receiptPrefix: cleanRcpPrefix,
-      currency: input.currency || 'ETB',
-      timezone: input.timezone || 'Africa/Addis_Ababa',
-      academicYear: input.academicYear || `${new Date().getFullYear()}/${new Date().getFullYear() + 1}`,
-      paymentMethods:
-        input.paymentMethods.length > 0
-          ? input.paymentMethods
-          : ['Cash', 'Bank Transfer', 'Telebirr', 'Chapa'],
-      defaultLanguage: input.defaultLanguage || 'English (Ethiopia)',
-      dateFormat: input.dateFormat || 'GREGORIAN_AND_ETHIOPIAN',
-      invoiceFooterNote:
-        input.invoiceFooterNote?.trim().slice(0, 240) ||
-        `Official financial document issued by ${input.name.trim()}.`,
-      notificationEmailEnabled: Boolean(input.notificationEmailEnabled),
-      notificationSmsEnabled: Boolean(input.notificationSmsEnabled),
-      notificationWhatsappEnabled: Boolean(input.notificationWhatsappEnabled),
-      emailGatewayStatus: input.notificationEmailEnabled ? 'CONFIGURED' : 'UNCONFIGURED',
-      smsGatewayStatus: input.notificationSmsEnabled ? 'CONFIGURED' : 'UNCONFIGURED',
-      whatsappGatewayStatus: input.notificationWhatsappEnabled ? 'CONFIGURED' : 'UNCONFIGURED',
-      smsSenderLabel: cleanStuPrefix.split('-')[0],
-      status: tenantStatus,
-      planId: input.planId,
-      planCode: input.planCode,
-      planName: input.planName,
-      billingCycle: input.billingCycle,
-      monthlyPriceEtb: Number(input.monthlyPriceEtb || 0),
-      quarterlyPriceEtb: Number(
-        input.quarterlyPriceEtb ?? Math.round(Number(input.monthlyPriceEtb || 0) * 2.7)
-      ),
-      annualPriceEtb: Number(input.annualPriceEtb || 0),
-      studentLimit: Math.max(1, Number(input.studentLimit || 100)),
-      staffLimit: Math.max(1, Number(input.staffLimit || 20)),
-      storageLimitMb: Math.max(128, Number(input.storageLimitMb || 2048)),
-      storageUsedMb: 0,
-      aiMonthlyQuota: Math.max(0, Number(input.aiMonthlyQuota || 0)),
-      aiRequestsUsed: 0,
-      enabledModules: input.enabledModules,
-      primaryAdminUid: input.primaryAdminUid,
-      primaryAdminName: input.primaryAdminName.trim().slice(0, 120),
-      primaryAdminEmail: input.primaryAdminEmail.trim().toLowerCase().slice(0, 160),
-      primaryAdminPhone: input.primaryAdminPhone.trim().slice(0, 32),
-      primaryAdminPosition: input.primaryAdminPosition.trim().slice(0, 80) || 'Institute Administrator',
-      subscriptionStartDate: input.subscriptionStartDate,
-      trialEndsAt,
-      subscriptionExpiresAt: input.subscriptionExpiresAt,
-      isDefaultPlatformTenant: false,
-      createdBy: actor.uid,
-      createdByName: actor.fullName.slice(0, 120),
-      createdAt: now,
-      updatedAt: now,
-    };
-    batch.set(doc(db, 'tenants', tenantId), cleanObject(tenantDoc));
-
-    // 2. Platform Subscription Document
-    batch.set(
+    coreBatch.set(
       doc(db, 'platform_subscriptions', subId),
       cleanObject({
         tenantId,
-        tenantName: tenantDoc.name,
-        planId: input.planId,
-        planCode: input.planCode,
-        planName: input.planName,
+        tenantName: safeName,
+        planId: safePlanId,
+        planCode: safePlanCode,
+        planName: safePlanName,
         billingCycle: input.billingCycle,
         priceEtb: effectivePrice,
-        currency: input.currency || 'ETB',
+        currency: safeCurrency,
         status: isTrial ? 'TRIAL' : 'ACTIVE',
-        startDate: input.subscriptionStartDate,
+        startDate: safeStartDate,
         trialEndsAt,
-        expiresAt: input.subscriptionExpiresAt,
+        expiresAt: safeExpiresAt,
         autoRenew: true,
-        updatedBy: actor.uid,
+        updatedBy: verifiedActor.uid,
         createdAt: now,
         updatedAt: now,
       })
     );
 
-    // 3. Initial Platform Invoice (if paid plan)
-    let invoiceNumber: string | undefined;
     if (effectivePrice > 0) {
       const invId = makeId('pinv');
-      invoiceNumber = `ZAC-INV-${new Date().getFullYear()}-${String(Math.floor(1000 + Math.random() * 9000))}`;
+      invoiceNumber = `ZAC-INV-${new Date().getFullYear()}-${String(Math.floor(1000 + Math.random() * 9000))}`.slice(
+        0,
+        40
+      );
       const isPaidNow = Boolean(input.markInitialInvoicePaid);
-      const payRef = input.initialPaymentRef?.trim() || `ZAC-SUB-${Date.now().toString().slice(-6)}`;
+      const payRef = sanitizeRequiredString(
+        input.initialPaymentRef,
+        `ZAC-SUB-${Date.now().toString().slice(-6)}`,
+        80
+      );
 
-      batch.set(
+      coreBatch.set(
         doc(db, 'platform_invoices', invId),
         cleanObject({
           invoiceNumber,
           tenantId,
-          tenantName: tenantDoc.name,
+          tenantName: safeName,
           subscriptionId: subId,
-          planName: input.planName,
+          planName: safePlanName,
           billingCycle: input.billingCycle,
           amountEtb: effectivePrice,
-          currency: input.currency || 'ETB',
-          dueDate: addDaysIso(input.subscriptionStartDate, 7),
+          currency: safeCurrency,
+          dueDate: addDaysIso(safeStartDate, 7),
           status: isPaidNow ? 'PAID' : 'PENDING',
           paidAt: isPaidNow ? now : undefined,
           paymentRef: isPaidNow ? payRef : undefined,
-          notes: `Initial ${input.billingCycle.toLowerCase()} SaaS subscription invoice for ${tenantDoc.name}.`,
-          issuedBy: actor.uid,
-          issuedByName: actor.fullName.slice(0, 120),
+          notes: `Initial ${input.billingCycle.toLowerCase()} SaaS subscription invoice for ${safeName}.`.slice(
+            0,
+            400
+          ),
+          issuedBy: verifiedActor.uid,
+          issuedByName: verifiedActor.fullName.slice(0, 120),
           createdAt: now,
           updatedAt: now,
         })
@@ -811,22 +983,22 @@ export async function provisionTrainingInstitute(
 
       if (isPaidNow) {
         const payId = makeId('ppay');
-        batch.set(
+        coreBatch.set(
           doc(db, 'platform_payments', payId),
           cleanObject({
             paymentRef: payRef,
             invoiceId: invId,
             invoiceNumber,
             tenantId,
-            tenantName: tenantDoc.name,
-            planName: input.planName,
+            tenantName: safeName,
+            planName: safePlanName,
             amountEtb: effectivePrice,
-            currency: input.currency || 'ETB',
-            paymentDate: todayIsoDate(),
+            currency: safeCurrency,
+            paymentDate: today,
             paymentMethod: input.initialPaymentMethod || 'Bank Transfer',
             status: 'COMPLETED',
-            recordedBy: actor.uid,
-            recordedByName: actor.fullName.slice(0, 120),
+            recordedBy: verifiedActor.uid,
+            recordedByName: verifiedActor.fullName.slice(0, 120),
             notes: 'Collected at institute provisioning.',
             createdAt: now,
           })
@@ -834,7 +1006,36 @@ export async function provisionTrainingInstitute(
       }
     }
 
-    // 4. Default Tenant-Scoped Payment Plans & Expense Categories
+    coreBatch.set(
+      doc(db, 'tenant_invitations', inviteId),
+      cleanObject({
+        token: inviteToken,
+        tenantId,
+        tenantName: safeName,
+        email: safeAdminEmailRaw,
+        emailLower: safeAdminEmailLower,
+        fullName: safeAdminName,
+        phone: safeAdminPhone,
+        position: safeAdminPosition,
+        role: 'ADMIN',
+        status: 'PENDING',
+        expiresAt: addDaysIso(today, 30),
+        createdBy: verifiedActor.uid,
+        createdByName: verifiedActor.fullName.slice(0, 120),
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    await coreBatch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `tenants/${tenantId}`);
+  }
+
+  // Phase 2: Tenant Workspace Defaults Batch (Payment Plans + Expense Categories + Departments + Welcome Notification + Audit Log)
+  try {
+    const workspaceBatch = writeBatch(db);
+
     const defaultPlans = [
       { code: 'FULL', name: 'Full Payment (Upfront)', installmentCount: 1, intervalDays: 0, description: 'Single 100% payment upon enrollment.' },
       { code: 'MONTHLY', name: 'Monthly Installment (3x)', installmentCount: 3, intervalDays: 30, description: 'Three equal monthly installments.' },
@@ -842,7 +1043,7 @@ export async function provisionTrainingInstitute(
       { code: 'CUSTOM', name: 'Custom Installment Schedule', installmentCount: 2, intervalDays: 30, description: 'Flexible custom installment count and interval.' },
     ];
     for (const p of defaultPlans) {
-      batch.set(doc(db, 'payment_plans', `${tenantId}_plan_${p.code.toLowerCase()}`), {
+      workspaceBatch.set(doc(db, 'payment_plans', `${tenantId}_plan_${p.code.toLowerCase()}`), {
         tenantId,
         ...p,
         isActive: true,
@@ -857,7 +1058,7 @@ export async function provisionTrainingInstitute(
       { key: 'marketing', name: 'Marketing & Admissions', description: 'Digital campaigns and enrollment outreach.' },
     ];
     for (const c of defaultCategories) {
-      batch.set(doc(db, 'expense_categories', `${tenantId}_cat_${c.key}`), {
+      workspaceBatch.set(doc(db, 'expense_categories', `${tenantId}_cat_${c.key}`), {
         tenantId,
         name: c.name,
         description: c.description,
@@ -865,91 +1066,78 @@ export async function provisionTrainingInstitute(
       });
     }
 
-    // 4b. Default Academic Departments for the new institute
     const defaultDepartments = [
       { code: 'TECH', name: 'Technology & Computing', description: 'Software, IT, and digital skills programs.' },
       { code: 'BUS', name: 'Business & Management', description: 'Accounting, entrepreneurship, and leadership tracks.' },
       { code: 'VOC', name: 'Vocational & Technical Trades', description: 'Hands-on engineering and practical certifications.' },
     ];
     for (const dept of defaultDepartments) {
-      batch.set(doc(db, 'departments', `${tenantId}_dept_${dept.code.toLowerCase()}`), {
+      workspaceBatch.set(doc(db, 'departments', `${tenantId}_dept_${dept.code.toLowerCase()}`), {
         tenantId,
         code: dept.code,
         name: dept.name,
         description: dept.description,
         isActive: true,
-        createdBy: actor.uid,
+        createdBy: verifiedActor.uid,
         createdAt: now,
         updatedAt: now,
       });
     }
 
-    // 5. Secure Onboarding Invitation for the Primary Institute Admin
-    const adminEmailLower = input.primaryAdminEmail.trim().toLowerCase();
-    batch.set(
-      doc(db, 'tenant_invitations', inviteId),
+    workspaceBatch.set(
+      doc(db, 'notifications', makeId('not_welcome')),
       cleanObject({
-        token: inviteToken,
         tenantId,
-        tenantName: tenantDoc.name,
-        email: input.primaryAdminEmail.trim(),
-        emailLower: adminEmailLower,
-        fullName: input.primaryAdminName.trim().slice(0, 120),
-        phone: input.primaryAdminPhone.trim().slice(0, 32),
-        position: input.primaryAdminPosition.trim().slice(0, 80),
-        role: 'ADMIN',
-        status: 'PENDING',
-        expiresAt: addDaysIso(todayIsoDate(), 30),
-        createdBy: actor.uid,
-        createdByName: actor.fullName.slice(0, 120),
+        type: 'INSTITUTE_PROVISIONED',
+        title: `Welcome to ${safeName} Portal`.slice(0, 140),
+        message: `Your independent training institute portal (${tenantId}) has been provisioned on the ${safePlanName} plan. Configure your courses, staff, and branding to begin.`.slice(
+          0,
+          420
+        ),
+        targetRole: 'ADMIN',
+        entityType: 'tenant',
+        entityId: tenantId,
+        isRead: false,
         createdAt: now,
-        updatedAt: now,
       })
     );
 
-    // 6. Welcome Notification inside the new tenant + Centralized Audit Log
-    batch.set(doc(db, 'notifications', makeId('not_welcome')), {
-      tenantId,
-      type: 'INSTITUTE_PROVISIONED',
-      title: `Welcome to ${tenantDoc.name} Portal`,
-      message: `Your independent training institute portal (${tenantId}) has been provisioned on the ${input.planName} plan. Configure your courses, staff, and branding to begin.`,
-      targetRole: 'ADMIN',
-      entityType: 'tenant',
-      entityId: tenantId,
-      isRead: false,
-      createdAt: now,
-    });
+    workspaceBatch.set(
+      doc(db, 'audit_logs', makeId('aud_prov')),
+      cleanObject({
+        tenantId,
+        actorId: verifiedActor.uid,
+        actorName: verifiedActor.fullName.slice(0, 120),
+        actorRole: verifiedActor.role,
+        actorPlatformRole: verifiedActor.platformRole,
+        action: 'INSTITUTE_PROVISIONED',
+        entityType: 'tenant',
+        entityId: tenantId,
+        summary: `Provisioned training institute "${safeName}" (${tenantId}) on ${safePlanName} (${tenantStatus}). Admin invite issued for ${safeAdminEmailLower}.`.slice(
+          0,
+          400
+        ),
+        result: 'SUCCESS',
+        createdAt: now,
+      })
+    );
 
-    batch.set(doc(db, 'audit_logs', makeId('aud_prov')), {
-      tenantId,
-      actorId: actor.uid,
-      actorName: actor.fullName.slice(0, 120),
-      actorRole: actor.role,
-      actorPlatformRole: actor.platformRole,
-      action: 'INSTITUTE_PROVISIONED',
-      entityType: 'tenant',
-      entityId: tenantId,
-      summary: `Provisioned training institute "${tenantDoc.name}" (${tenantId}) on ${input.planName} (${tenantStatus}). Admin invite issued for ${adminEmailLower}.`,
-      result: 'SUCCESS',
-      createdAt: now,
-    });
-
-    await batch.commit();
-
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const inviteUrl = `${origin}/?invite=${encodeURIComponent(inviteToken)}&email=${encodeURIComponent(adminEmailLower)}&tenant=${encodeURIComponent(tenantDoc.name)}`;
-
-    return {
-      tenantId,
-      slug,
-      invitationId: inviteId,
-      inviteToken,
-      inviteUrl,
-      invoiceNumber,
-    };
+    await workspaceBatch.commit();
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, `tenants/${tenantId}`);
+    handleFirestoreError(error, OperationType.CREATE, `workspace_init/${tenantId}`);
   }
+
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const inviteUrl = `${origin}/?invite=${encodeURIComponent(inviteToken)}&email=${encodeURIComponent(safeAdminEmailLower)}&tenant=${encodeURIComponent(safeName)}`;
+
+  return {
+    tenantId,
+    slug,
+    invitationId: inviteId,
+    inviteToken,
+    inviteUrl,
+    invoiceNumber,
+  };
 }
 
 export async function updateTenantBySuperAdmin(
@@ -1766,49 +1954,58 @@ export async function updateOwnInstituteBranding(
   const now = new Date().toISOString();
   try {
     const batch = writeBatch(db);
+    const safeStuPrefix = sanitizeCodePrefix(updates.studentIdPrefix, 'STU');
+    const safeStfPrefix = sanitizeCodePrefix(updates.staffIdPrefix, safeStuPrefix);
     batch.update(doc(db, 'tenants', tenantId), {
-      name: updates.name.trim().slice(0, 140),
-      shortName: updates.shortName.trim().slice(0, 48),
-      email: updates.email.trim().toLowerCase().slice(0, 160),
-      phone: updates.phone.trim().slice(0, 32),
-      address: updates.address.trim().slice(0, 240),
-      city: updates.city.trim().slice(0, 80),
-      country: updates.country.trim().slice(0, 80),
+      name: sanitizeRequiredString(updates.name, 'Training Institute', 140),
+      shortName: sanitizeRequiredString(updates.shortName, updates.name.trim().slice(0, 28), 40),
+      email: sanitizeRequiredString(updates.email.toLowerCase(), 'info@institute.edu.et', 160),
+      phone: sanitizePhone(updates.phone),
+      address: sanitizeRequiredString(updates.address, `${updates.city || 'Addis Ababa'}, ${updates.country || 'Ethiopia'}`, 240),
+      city: sanitizeRequiredString(updates.city, 'Addis Ababa', 80),
+      country: sanitizeRequiredString(updates.country, 'Ethiopia', 80),
       website: updates.website?.trim().slice(0, 200) || '',
       logoUrl: updates.logoUrl?.slice(0, 90000) || '',
-      primaryColor: updates.primaryColor,
-      secondaryColor: updates.secondaryColor,
-      studentIdPrefix: updates.studentIdPrefix.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 14),
-      staffIdPrefix: updates.staffIdPrefix.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 14),
-      receiptPrefix: updates.receiptPrefix.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 14),
+      primaryColor: sanitizeRequiredString(updates.primaryColor, '#0B2545', 20),
+      secondaryColor: sanitizeRequiredString(updates.secondaryColor, '#D97706', 20),
+      studentIdPrefix: safeStuPrefix,
+      staffIdPrefix: safeStfPrefix,
+      receiptPrefix: (
+        updates.receiptPrefix.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 14) ||
+        `${safeStuPrefix}-RCP`
+      ).slice(0, 16),
       currency: updates.currency,
-      timezone: updates.timezone,
-      academicYear: updates.academicYear.trim().slice(0, 32),
-      paymentMethods: updates.paymentMethods,
-      defaultLanguage: updates.defaultLanguage,
+      timezone: sanitizeRequiredString(updates.timezone, 'Africa/Addis_Ababa', 60),
+      academicYear: sanitizeRequiredString(updates.academicYear, `${new Date().getFullYear()}/${new Date().getFullYear() + 1}`, 30),
+      paymentMethods: updates.paymentMethods.slice(0, 10),
+      defaultLanguage: sanitizeRequiredString(updates.defaultLanguage, 'English (Ethiopia)', 40),
       dateFormat: updates.dateFormat,
-      invoiceFooterNote: updates.invoiceFooterNote?.trim().slice(0, 240) || '',
+      invoiceFooterNote: updates.invoiceFooterNote?.trim().slice(0, 300) || '',
       notificationEmailEnabled: updates.notificationEmailEnabled,
       notificationSmsEnabled: updates.notificationSmsEnabled,
       notificationWhatsappEnabled: updates.notificationWhatsappEnabled,
       emailGatewayStatus: updates.emailGatewayStatus,
       smsGatewayStatus: updates.smsGatewayStatus,
       whatsappGatewayStatus: updates.whatsappGatewayStatus,
-      smsSenderLabel: updates.smsSenderLabel?.trim().slice(0, 16) || '',
+      smsSenderLabel: updates.smsSenderLabel?.trim().slice(0, 30) || '',
       updatedAt: now,
     });
-    batch.set(doc(db, 'audit_logs', makeId('aud_brand')), {
-      tenantId,
-      actorId: actor.uid,
-      actorName: actor.fullName.slice(0, 120),
-      actorRole: actor.role,
-      action: 'INSTITUTE_BRANDING_UPDATED',
-      entityType: 'tenant',
-      entityId: tenantId,
-      summary: `Updated branding and portal configuration for ${updates.name.trim()}.`,
-      result: 'SUCCESS',
-      createdAt: now,
-    });
+    batch.set(
+      doc(db, 'audit_logs', makeId('aud_brand')),
+      cleanObject({
+        tenantId,
+        actorId: actor.uid,
+        actorName: sanitizeRequiredString(actor.fullName, 'Institute Admin', 120),
+        actorRole: actor.role,
+        actorPlatformRole: actor.platformRole,
+        action: 'INSTITUTE_BRANDING_UPDATED',
+        entityType: 'tenant',
+        entityId: tenantId,
+        summary: `Updated branding and portal configuration for ${updates.name.trim()}.`.slice(0, 400),
+        result: 'SUCCESS',
+        createdAt: now,
+      })
+    );
     await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `tenants/${tenantId}`);
@@ -2084,7 +2281,7 @@ export async function submitInstituteRegistrationRequest(
       ? 90
       : 30;
     const expiresAt = addDaysIso(today, durationDays);
-    const prefix = slug.replace(/[^a-z0-9]/g, '').slice(0, 4).toUpperCase() || 'INS';
+    const prefix = sanitizeCodePrefix(slug.replace(/[^a-z0-9]/g, '').slice(0, 4).toUpperCase(), 'INS');
     const priceEtb = isTrial
       ? 0
       : input.billingCycle === 'ANNUAL'
@@ -2093,31 +2290,34 @@ export async function submitInstituteRegistrationRequest(
       ? input.selectedPlan.quarterlyPriceEtb ?? Math.round(input.selectedPlan.monthlyPriceEtb * 2.7)
       : input.selectedPlan.monthlyPriceEtb;
 
+    const safeCity = sanitizeRequiredString(input.city, 'Addis Ababa', 80);
+    const safeCountry = sanitizeRequiredString(input.country, 'Ethiopia', 80);
+    const safePhone = sanitizePhone(input.phone);
     const tenantPayload: Omit<TenantRecord, 'id'> = {
       tenantId,
-      name: input.instituteName.trim().slice(0, 140),
-      shortName: (input.shortName.trim() || input.instituteName.trim().slice(0, 28)).slice(0, 40),
+      name: sanitizeRequiredString(input.instituteName, 'Training Institute', 140),
+      shortName: sanitizeRequiredString(input.shortName, input.instituteName.trim().slice(0, 28), 40),
       slug,
-      businessType: input.businessType.trim().slice(0, 80) || 'Training Institute',
-      email: input.email.trim().toLowerCase().slice(0, 160),
-      phone: input.phone.trim().slice(0, 30),
-      country: input.country.trim().slice(0, 80) || 'Ethiopia',
-      city: input.city.trim().slice(0, 80) || 'Addis Ababa',
-      address: input.address.trim().slice(0, 240) || `${input.city}, ${input.country}`,
+      businessType: sanitizeRequiredString(input.businessType, 'Training Institute', 80),
+      email: sanitizeRequiredString(input.email.toLowerCase(), 'info@institute.edu.et', 160),
+      phone: safePhone,
+      country: safeCountry,
+      city: safeCity,
+      address: sanitizeRequiredString(input.address, `${safeCity}, ${safeCountry}`, 240),
       website: input.website?.trim().slice(0, 200),
       logoUrl: input.logoUrl?.slice(0, 90000),
-      primaryColor: input.primaryColor || '#172DEB',
-      secondaryColor: input.secondaryColor || '#E51B23',
+      primaryColor: sanitizeRequiredString(input.primaryColor, '#172DEB', 20),
+      secondaryColor: sanitizeRequiredString(input.secondaryColor, '#E51B23', 20),
       studentIdPrefix: prefix,
       staffIdPrefix: prefix,
-      receiptPrefix: `${prefix}-RCP`,
+      receiptPrefix: `${prefix}-RCP`.slice(0, 16),
       currency: input.currency || 'ETB',
       timezone: 'Africa/Addis_Ababa',
       academicYear: `${new Date().getFullYear()}/${new Date().getFullYear() + 1}`,
       paymentMethods: ['Cash', 'CBE Birr', 'Telebirr', 'Bank Transfer', 'Chapa'],
       defaultLanguage: 'English (Ethiopia)',
       dateFormat: 'GREGORIAN_AND_ETHIOPIAN',
-      invoiceFooterNote: `Official financial document issued by ${input.instituteName.trim()}.`,
+      invoiceFooterNote: `Official financial document issued by ${input.instituteName.trim()}.`.slice(0, 300),
       notificationEmailEnabled: true,
       notificationSmsEnabled: true,
       notificationWhatsappEnabled: false,
@@ -2233,13 +2433,16 @@ export async function submitInstituteRegistrationRequest(
         })
       );
 
-      batch.update(doc(db, 'profiles', input.applicantUid), {
-        tenantId,
-        role: 'ADMIN',
-        fullName: tenantPayload.primaryAdminName,
-        phone: tenantPayload.primaryAdminPhone,
-        updatedAt: now,
-      });
+      const applicantProfileSnap = await getDoc(doc(db, 'profiles', input.applicantUid)).catch(() => null);
+      if (applicantProfileSnap?.exists() && !applicantProfileSnap.data()?.platformRole) {
+        batch.update(doc(db, 'profiles', input.applicantUid), {
+          tenantId,
+          role: 'ADMIN',
+          fullName: tenantPayload.primaryAdminName,
+          phone: tenantPayload.primaryAdminPhone,
+          updatedAt: now,
+        });
+      }
 
       await batch.commit();
       provisionedTenantId = tenantId;
@@ -2252,29 +2455,32 @@ export async function submitInstituteRegistrationRequest(
 
   // Manual Super Admin Approval flow
   try {
+    const safeCity = sanitizeRequiredString(input.city, 'Addis Ababa', 80);
+    const safeCountry = sanitizeRequiredString(input.country, 'Ethiopia', 80);
+    const safePhone = sanitizePhone(input.phone);
     const reqDoc: Omit<InstituteRegistrationRequest, 'id'> = {
-      instituteName: input.instituteName.trim().slice(0, 140),
-      shortName: (input.shortName.trim() || input.instituteName.trim().slice(0, 28)).slice(0, 40),
+      instituteName: sanitizeRequiredString(input.instituteName, 'Training Institute', 140),
+      shortName: sanitizeRequiredString(input.shortName, input.instituteName.trim().slice(0, 28), 40),
       slug,
-      businessType: input.businessType.trim().slice(0, 80) || 'Training Institute',
-      email: input.email.trim().toLowerCase().slice(0, 160),
-      phone: input.phone.trim().slice(0, 30),
-      country: input.country.trim().slice(0, 80) || 'Ethiopia',
-      city: input.city.trim().slice(0, 80) || 'Addis Ababa',
-      address: input.address.trim().slice(0, 240) || `${input.city}, ${input.country}`,
+      businessType: sanitizeRequiredString(input.businessType, 'Training Institute', 80),
+      email: sanitizeRequiredString(input.email.toLowerCase(), 'info@institute.edu.et', 160),
+      phone: safePhone,
+      country: safeCountry,
+      city: safeCity,
+      address: sanitizeRequiredString(input.address, `${safeCity}, ${safeCountry}`, 240),
       website: input.website?.trim().slice(0, 200),
       logoUrl: input.logoUrl?.slice(0, 90000),
-      primaryColor: input.primaryColor || '#172DEB',
-      secondaryColor: input.secondaryColor || '#E51B23',
+      primaryColor: sanitizeRequiredString(input.primaryColor, '#172DEB', 20),
+      secondaryColor: sanitizeRequiredString(input.secondaryColor, '#E51B23', 20),
       currency: input.currency || 'ETB',
-      selectedPlanId: input.selectedPlan.id,
-      selectedPlanCode: input.selectedPlan.code,
-      selectedPlanName: input.selectedPlan.name,
+      selectedPlanId: sanitizeRequiredString(input.selectedPlan.id, 'plan_free_trial', 80),
+      selectedPlanCode: sanitizeRequiredString(input.selectedPlan.code, 'FREE_TRIAL', 40),
+      selectedPlanName: sanitizeRequiredString(input.selectedPlan.name, 'Free Trial', 80),
       billingCycle: input.billingCycle,
-      adminFullName: input.adminFullName.trim().slice(0, 120),
-      adminEmail: input.adminEmail.trim().toLowerCase().slice(0, 160),
-      adminPhone: input.adminPhone.trim().slice(0, 30),
-      adminPosition: input.adminPosition.trim().slice(0, 80) || 'Institute Administrator',
+      adminFullName: sanitizeRequiredString(input.adminFullName, 'Institute Administrator', 120),
+      adminEmail: sanitizeRequiredString(input.adminEmail.toLowerCase(), 'admin@institute.edu.et', 160),
+      adminPhone: sanitizePhone(input.adminPhone, safePhone),
+      adminPosition: sanitizeRequiredString(input.adminPosition, 'Institute Administrator', 80),
       applicantUid: input.applicantUid,
       status: 'PENDING',
       createdAt: now,
@@ -2310,7 +2516,10 @@ export async function approveInstituteRegistrationRequest(
     : request.billingCycle === 'QUARTERLY'
     ? 90
     : 30;
-  const prefix = request.slug.replace(/[^a-z0-9]/g, '').slice(0, 4).toUpperCase() || 'INS';
+  const prefix = sanitizeCodePrefix(
+    request.slug.replace(/[^a-z0-9]/g, '').slice(0, 4).toUpperCase(),
+    'INS'
+  );
 
   const result = await provisionTrainingInstitute(
     {
@@ -2376,10 +2585,11 @@ export async function approveInstituteRegistrationRequest(
   });
 
   // Immediately bind the applicant's existing Firebase Auth profile as ADMIN of the new tenant
+  // (never overwrite a Platform Admin / Super Admin profile if testing self-registration)
   if (request.applicantUid) {
     try {
       const profSnap = await getDoc(doc(db, 'profiles', request.applicantUid));
-      if (profSnap.exists()) {
+      if (profSnap.exists() && !profSnap.data()?.platformRole) {
         batch.update(doc(db, 'profiles', request.applicantUid), {
           tenantId: result.tenantId,
           role: 'ADMIN',

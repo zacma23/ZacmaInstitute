@@ -28,7 +28,10 @@ service cloud.firestore {
     }
 
     function isBootstrapAdmin() {
-      return isSignedIn() && request.auth.token.email_verified == true && request.auth.token.email == 'zekimuluken@gmail.com';
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email != null
+        && request.auth.token.email.lower() == 'zekimuluken@gmail.com';
     }
 
     function profileExists() {
@@ -39,37 +42,33 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data;
     }
 
-    // Layer 1: ZACMA SaaS Platform Owner Roles
+    // Layer 1: ZACMA SaaS Platform Owner Roles (Database-backed UID profile role + single lookup)
+    function hasPlatformRole(allowedRoles) {
+      return isSignedIn()
+        && profileExists()
+        && myProfile().isActive == true
+        && ('platformRole' in myProfile())
+        && myProfile().platformRole in allowedRoles;
+    }
+
     function isPlatformSuperAdmin() {
-      return isBootstrapAdmin() || (
-        isSignedIn() && profileExists() && myProfile().isActive == true
-        && ('platformRole' in myProfile()) && myProfile().platformRole == 'SUPER_ADMIN'
-      );
+      return hasPlatformRole(['SUPER_ADMIN']) || isBootstrapAdmin();
     }
 
     function isPlatformAdmin() {
-      return isPlatformSuperAdmin() || (
-        isSignedIn() && profileExists() && myProfile().isActive == true
-        && ('platformRole' in myProfile()) && myProfile().platformRole == 'PLATFORM_ADMIN'
-      );
+      return hasPlatformRole(['SUPER_ADMIN', 'PLATFORM_ADMIN']) || isBootstrapAdmin();
     }
 
     function isPlatformFinance() {
-      return isPlatformAdmin() || (
-        isSignedIn() && profileExists() && myProfile().isActive == true
-        && ('platformRole' in myProfile()) && myProfile().platformRole == 'PLATFORM_FINANCE'
-      );
+      return hasPlatformRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'PLATFORM_FINANCE']) || isBootstrapAdmin();
     }
 
     function isPlatformSupport() {
-      return isPlatformAdmin() || (
-        isSignedIn() && profileExists() && myProfile().isActive == true
-        && ('platformRole' in myProfile()) && myProfile().platformRole == 'PLATFORM_SUPPORT'
-      );
+      return hasPlatformRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'PLATFORM_SUPPORT']) || isBootstrapAdmin();
     }
 
     function isPlatformStaff() {
-      return isPlatformSuperAdmin() || isPlatformAdmin() || isPlatformFinance() || isPlatformSupport();
+      return hasPlatformRole(['SUPER_ADMIN', 'PLATFORM_ADMIN', 'PLATFORM_FINANCE', 'PLATFORM_SUPPORT']) || isBootstrapAdmin();
     }
 
     // Layer 2: Independent Training Institute Roles
@@ -1931,7 +1930,11 @@ service cloud.firestore {
     // 34. Tenants (Training Institutes — Platform manages; Institute Admin updates own branding only)
     // ---------------------------------------------------------
     match /tenants/{tenantId} {
-      allow get: if isSignedIn() && isValidId(tenantId) && (isPlatformStaff() || tenantId == userTenantId() || existing().primaryAdminUid == request.auth.uid);
+      allow get: if isSignedIn() && isValidId(tenantId) && (
+        isPlatformStaff() ||
+        tenantId == userTenantId() ||
+        (('primaryAdminUid' in existing()) && existing().primaryAdminUid == request.auth.uid)
+      );
       allow list: if isSignedIn() && (isPlatformStaff() || existing().tenantId == userTenantId());
       allow create: if isSignedIn() && isValidId(tenantId) && isValidTenant(incoming()) && incoming().tenantId == tenantId && (
         isPlatformAdmin() ||

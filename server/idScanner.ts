@@ -1,5 +1,7 @@
 import { type GenerateContentResponse, ThinkingLevel, Type } from '@google/genai';
 import { getAiModelName, getGeminiClient, type HandlerResult } from './handlers.ts';
+import { verifyFirebaseIdToken } from './aiAuthGuard.ts';
+import { handleSessionValidate } from './sessionManager.ts';
 
 export type SupportedIdDocumentType =
   | 'ETHIOPIAN_FAYDA_ID'
@@ -228,7 +230,35 @@ const SCAN_RESPONSE_SCHEMA = {
   },
 };
 
-export async function handleScanIdDocument(body: ScanIdRequestBody): Promise<HandlerResult> {
+export async function handleScanIdDocument(
+  body: ScanIdRequestBody,
+  authHeader?: string,
+  cookieHeader?: string
+): Promise<HandlerResult> {
+  // Verify authenticated staff caller via Firebase ID token or signed HttpOnly session cookie
+  let callerAuthenticated = false;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const verified = await verifyFirebaseIdToken(authHeader).catch(() => null);
+    if (verified?.ok && verified.token?.uid) {
+      callerAuthenticated = true;
+    }
+  }
+  if (!callerAuthenticated && cookieHeader) {
+    const sess = handleSessionValidate(cookieHeader);
+    if (sess.status === 200 && sess.body.authenticated === true) {
+      callerAuthenticated = true;
+    }
+  }
+  if (!callerAuthenticated) {
+    return {
+      status: 401,
+      body: {
+        code: 'AUTH_REQUIRED',
+        error: 'Authentication required. Sign in as authorized registration staff to scan identification documents.',
+      },
+    };
+  }
+
   if (!body || body.consentConfirmed !== true) {
     return {
       status: 400,
@@ -346,19 +376,51 @@ CRITICAL RULES:
       : 'Analyze this identification document (FRONT side) and return the structured JSON extraction.',
   });
 
-  const model = getAiModelName();
+  const preferredModel = getAiModelName();
+  const candidateModels = Array.from(new Set([preferredModel, 'gemini-3.1-flash-lite']));
+  let model = preferredModel;
+  let response: GenerateContentResponse | null = null;
+  let lastErr: unknown = null;
 
   try {
-    const response: GenerateContentResponse = await ai.models.generateContent({
-      model,
-      contents: { parts },
-      config: {
-        systemInstruction,
-        responseMimeType: 'application/json',
-        responseSchema: SCAN_RESPONSE_SCHEMA,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      },
-    });
+    for (let i = 0; i < candidateModels.length; i++) {
+      const activeModel = candidateModels[i];
+      const hasNext = i < candidateModels.length - 1;
+      try {
+        response = await ai.models.generateContent({
+          model: activeModel,
+          contents: { parts },
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+            responseSchema: SCAN_RESPONSE_SCHEMA,
+            ...(activeModel.startsWith('gemini-4-')
+              ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+              : {}),
+          },
+        });
+        model = activeModel;
+        break;
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        const canFallback =
+          hasNext &&
+          (msg.includes('503') ||
+            msg.includes('UNAVAILABLE') ||
+            msg.includes('429') ||
+            msg.includes('404') ||
+            msg.includes('NOT_FOUND'));
+        if (canFallback) {
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (!response) {
+      throw lastErr instanceof Error ? lastErr : new Error('No response from Gemini OCR engine.');
+    }
 
     const rawText = (response.text ?? '').trim();
     if (!rawText) {

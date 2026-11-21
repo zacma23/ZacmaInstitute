@@ -15,6 +15,7 @@ import {
   handleSmsBalance,
   handleSmsSend,
   handleSmsStatus,
+  handleVerifyPlatformAdmin,
   recordScheduledHeartbeat,
   type ServerSmsProvider,
 } from './server/handlers.ts';
@@ -90,8 +91,18 @@ async function createApp() {
     res.status(out.status).json(out.body);
   });
 
+  app.post('/api/saas/verify-super-admin', async (req: Request, res: Response) => {
+    const out = await handleVerifyPlatformAdmin(req.headers.authorization);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.status(out.status).json(out.body);
+  });
+
   app.post('/api/ai/scan-id', async (req: Request, res: Response) => {
-    const out = await handleScanIdDocument(req.body || {});
+    const out = await handleScanIdDocument(
+      req.body || {},
+      req.headers.authorization,
+      req.headers.cookie
+    );
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.status(out.status).json(out.body);
   });
@@ -142,8 +153,8 @@ async function createApp() {
     res.status(out.status).json(out.body);
   });
 
-  app.post('/api/reminders/dispatch-external', (req: Request, res: Response) => {
-    const out = handleDispatchExternal(req.body);
+  app.post('/api/reminders/dispatch-external', async (req: Request, res: Response) => {
+    const out = await handleDispatchExternal(req.body);
     res.status(out.status).json(out.body);
   });
 

@@ -3,7 +3,12 @@ import path from 'path';
 import { type Content, type GenerateContentResponse, GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { buildKnowledgeContextForRole } from '../src/lib/knowledgeBase.ts';
 import type { AiRoleScope } from '../src/types/zacma.ts';
-import { authorizeAiRequest, runAiSecurityAuditSuite } from './aiAuthGuard.ts';
+import {
+  authorizeAiRequest,
+  runAiSecurityAuditSuite,
+  verifyPlatformAdminAuthorization,
+} from './aiAuthGuard.ts';
+import { handleChapaStatus } from './chapaGateway.ts';
 
 export interface HandlerResult {
   status: number;
@@ -128,14 +133,22 @@ export function getProviderReadiness() {
     },
     channels: {
       inApp: { configured: true, status: 'ACTIVE' },
-      email: {
-        configured:
+      email: (() => {
+        const resendReady = hasRealEnv('RESEND_API_KEY');
+        const smtpReady =
           hasRealEnv('SMTP_HOST') &&
           hasRealEnv('SMTP_USER') &&
-          hasRealEnv('SMTP_PASS'),
-        provider: process.env.SMTP_HOST ? `SMTP (${process.env.SMTP_HOST})` : 'Unconfigured',
-        envVars: ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM'],
-      },
+          hasRealEnv('SMTP_PASS');
+        return {
+          configured: resendReady || smtpReady,
+          provider: resendReady
+            ? 'Resend Email API'
+            : smtpReady
+            ? `SMTP (${process.env.SMTP_HOST})`
+            : 'Unconfigured',
+          envVars: ['RESEND_API_KEY', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM'],
+        };
+      })(),
       sms: (() => {
         const afroReady = hasRealEnv('AFROMESSAGE_API_KEY');
         const geezReady = hasRealEnv('GEEZSMS_API_TOKEN');
@@ -169,6 +182,7 @@ export function getProviderReadiness() {
         envVars: ['WHATSAPP_API_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'],
       },
     },
+    chapa: handleChapaStatus().body,
     cronSecretConfigured: hasRealEnv('CRON_SECRET', 'CHANGE_ME'),
   };
 }
@@ -836,21 +850,27 @@ export async function handleSetupStatus(rootDir: string = process.cwd()): Promis
       present: providers.cronSecretConfigured,
     },
     {
-      key: 'SMTP_HOST / SMTP_USER / SMTP_PASS',
-      category: 'Optional Email Delivery',
-      requiredFor: 'Automated student fee reminder emails',
-      present: providers.channels.email.configured,
+      key: 'CHAPA_PUBLIC_KEY / CHAPA_SECRET_KEY / CHAPA_ENCRYPTION_KEY',
+      category: 'Chapa Online Payments (ETB)',
+      requiredFor: 'Online student tuition & ZIMS SaaS subscription checkout + webhook verification',
+      present: Boolean((providers.chapa as { configured?: boolean })?.configured),
     },
     {
-      key: 'TWILIO_ACCOUNT_SID / AUTH_TOKEN',
-      category: 'Optional SMS Delivery',
-      requiredFor: 'Automated student fee reminder SMS alerts',
+      key: 'AFROMESSAGE_API_KEY / GEEZSMS_API_TOKEN / TWILIO_*',
+      category: 'Optional SMS Delivery (+251)',
+      requiredFor: 'Automated Ethiopian & international student fee reminder SMS alerts',
       present: providers.channels.sms.configured,
     },
     {
-      key: 'WHATSAPP_API_TOKEN / PHONE_ID',
+      key: 'RESEND_API_KEY (or SMTP_HOST / USER / PASS)',
+      category: 'Optional Email Delivery',
+      requiredFor: 'Automated student fee reminder & receipt emails',
+      present: providers.channels.email.configured,
+    },
+    {
+      key: 'WHATSAPP_API_TOKEN / WHATSAPP_PHONE_NUMBER_ID',
       category: 'Optional WhatsApp Delivery',
-      requiredFor: 'Automated student fee reminder WhatsApp messages',
+      requiredFor: 'Automated student fee reminder WhatsApp messages via Meta Cloud API',
       present: providers.channels.whatsapp.configured,
     },
   ];
@@ -932,12 +952,12 @@ export async function handleCronReminders(authHeader?: string): Promise<HandlerR
   };
 }
 
-export function handleDispatchExternal(payload: {
+export async function handleDispatchExternal(payload: {
   channel?: 'email' | 'sms' | 'whatsapp';
   recipient?: string;
   subject?: string;
   body?: string;
-}): HandlerResult {
+}): Promise<HandlerResult> {
   const { channel, recipient, subject, body } = payload || {};
   const channels = getProviderReadiness().channels;
   if (!channel || !recipient || !body) {
@@ -946,51 +966,233 @@ export function handleDispatchExternal(payload: {
       body: { error: 'channel, recipient, and body are required.' },
     };
   }
-  if (channel === 'email' && !channels.email.configured) {
+
+  // 1. Live SMS Dispatch (routes directly to configured Ethiopian/Global SMS gateway)
+  if (channel === 'sms') {
+    if (!channels.sms.configured) {
+      return {
+        status: 503,
+        body: {
+          delivered: false,
+          status: 'PROVIDER_NOT_CONFIGURED',
+          channel,
+          message: `SMS provider not configured. Set one of ${channels.sms.envVars.join(', ')} in server environment variables.`,
+        },
+      };
+    }
+    const smsStatus = getSmsGatewayStatus();
+    const activeProvider: ServerSmsProvider = smsStatus.providers.afromessage.configured
+      ? 'afromessage'
+      : smsStatus.providers.geezsms.configured
+      ? 'geezsms'
+      : smsStatus.providers.twilio.configured
+      ? 'twilio'
+      : 'africastalking';
+    const smsRes = await handleSmsSend({
+      provider: activeProvider,
+      to: recipient,
+      message: body,
+      testMode: false,
+    });
     return {
-      status: 503,
+      status: smsRes.status,
       body: {
-        delivered: false,
-        status: 'PROVIDER_NOT_CONFIGURED',
+        delivered: Boolean(smsRes.body.ok),
+        status: smsRes.body.status || (smsRes.body.ok ? 'SENT' : 'FAILED'),
         channel,
-        message: `Email provider not configured. Set ${channels.email.envVars.join(', ')} in server environment variables.`,
+        provider: activeProvider,
+        recipient: smsRes.body.normalizedPhone || recipient,
+        providerMessageId: smsRes.body.providerMessageId,
+        message: String(smsRes.body.detail || smsRes.body.error || 'SMS dispatch completed.'),
       },
     };
   }
-  if (channel === 'sms' && !channels.sms.configured) {
-    return {
-      status: 503,
-      body: {
-        delivered: false,
-        status: 'PROVIDER_NOT_CONFIGURED',
-        channel,
-        message: `SMS provider not configured. Set ${channels.sms.envVars.join(', ')} in server environment variables.`,
-      },
-    };
+
+  // 2. Live WhatsApp Cloud API Dispatch
+  if (channel === 'whatsapp') {
+    const waToken = cleanEnvValue(process.env.WHATSAPP_API_TOKEN);
+    const waPhoneId = cleanEnvValue(process.env.WHATSAPP_PHONE_NUMBER_ID);
+    if (!waToken || !waPhoneId) {
+      return {
+        status: 503,
+        body: {
+          delivered: false,
+          status: 'PROVIDER_NOT_CONFIGURED',
+          channel,
+          message: `WhatsApp Cloud API not configured. Set ${channels.whatsapp.envVars.join(', ')} in server environment variables.`,
+        },
+      };
+    }
+    const phoneCheck = normalizeEthiopianPhone(recipient);
+    if (!phoneCheck.valid) {
+      return {
+        status: 400,
+        body: {
+          delivered: false,
+          status: 'INVALID_RECIPIENT',
+          channel,
+          message: phoneCheck.error || 'Valid E.164 phone number is required for WhatsApp delivery.',
+        },
+      };
+    }
+    try {
+      const waTo = phoneCheck.e164.replace(/^\+/, '');
+      const waRes = await fetch(
+        `https://graph.facebook.com/v20.0/${encodeURIComponent(waPhoneId)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${waToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: waTo,
+            type: 'text',
+            text: { body: String(body).slice(0, 1024) },
+          }),
+          signal: AbortSignal.timeout(10000),
+        }
+      );
+      const waJson = (await waRes.json().catch(() => ({}))) as {
+        messages?: Array<{ id?: string }>;
+        error?: { message?: string };
+      };
+      if (waRes.ok && waJson.messages?.[0]?.id) {
+        return {
+          status: 200,
+          body: {
+            delivered: true,
+            status: 'SENT',
+            channel,
+            provider: 'Meta WhatsApp Cloud API',
+            recipient: phoneCheck.e164,
+            providerMessageId: waJson.messages[0].id,
+            message: 'Message accepted by Meta WhatsApp Cloud API.',
+          },
+        };
+      }
+      return {
+        status: 502,
+        body: {
+          delivered: false,
+          status: 'FAILED',
+          channel,
+          message: waJson.error?.message || `WhatsApp Cloud API returned HTTP ${waRes.status}.`,
+        },
+      };
+    } catch (err) {
+      return {
+        status: 502,
+        body: {
+          delivered: false,
+          status: 'FAILED',
+          channel,
+          message: err instanceof Error ? err.message : 'WhatsApp Cloud API network error.',
+        },
+      };
+    }
   }
-  if (channel === 'whatsapp' && !channels.whatsapp.configured) {
+
+  // 3. Live Email Dispatch via Resend HTTP API (Vercel Serverless compatible)
+  if (channel === 'email') {
+    const resendKey = cleanEnvValue(process.env.RESEND_API_KEY);
+    if (resendKey) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient.trim())) {
+        return {
+          status: 400,
+          body: {
+            delivered: false,
+            status: 'INVALID_RECIPIENT',
+            channel,
+            message: 'A valid recipient email address is required.',
+          },
+        };
+      }
+      const fromAddr = cleanEnvValue(process.env.SMTP_FROM) || 'ZACMA Finance <onboarding@resend.dev>';
+      try {
+        const emailRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${resendKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: fromAddr,
+            to: [recipient.trim()],
+            subject: subject || 'ZACMA Payment Reminder',
+            text: String(body).slice(0, 4000),
+          }),
+          signal: AbortSignal.timeout(10000),
+        });
+        const emailJson = (await emailRes.json().catch(() => ({}))) as {
+          id?: string;
+          message?: string;
+        };
+        if (emailRes.ok && emailJson.id) {
+          return {
+            status: 200,
+            body: {
+              delivered: true,
+              status: 'SENT',
+              channel,
+              provider: 'Resend Email API',
+              recipient: recipient.trim(),
+              providerMessageId: emailJson.id,
+              message: 'Email accepted for delivery by Resend.',
+            },
+          };
+        }
+        return {
+          status: 502,
+          body: {
+            delivered: false,
+            status: 'FAILED',
+            channel,
+            message: emailJson.message || `Resend Email API returned HTTP ${emailRes.status}.`,
+          },
+        };
+      } catch (err) {
+        return {
+          status: 502,
+          body: {
+            delivered: false,
+            status: 'FAILED',
+            channel,
+            message: err instanceof Error ? err.message : 'Resend Email API network error.',
+          },
+        };
+      }
+    }
+
+    if (!channels.email.configured) {
+      return {
+        status: 503,
+        body: {
+          delivered: false,
+          status: 'PROVIDER_NOT_CONFIGURED',
+          channel,
+          message:
+            'Email provider not configured. Set RESEND_API_KEY (recommended for Vercel serverless) or SMTP_HOST/SMTP_USER/SMTP_PASS in server environment variables.',
+        },
+      };
+    }
+
     return {
       status: 503,
       body: {
         delivered: false,
-        status: 'PROVIDER_NOT_CONFIGURED',
+        status: 'SMTP_REQUIRES_RESEND_KEY',
         channel,
-        message: `WhatsApp Cloud API not configured. Set ${channels.whatsapp.envVars.join(', ')} in server environment variables.`,
+        message:
+          'SMTP credentials detected, but serverless HTTP email delivery requires RESEND_API_KEY in Vercel environment variables.',
       },
     };
   }
 
   return {
-    status: 200,
-    body: {
-      delivered: false,
-      status: 'QUEUED_FOR_PROVIDER_WEBHOOK',
-      channel,
-      recipient,
-      subject: subject || 'ZACMA Payment Reminder',
-      message:
-        'Provider credentials detected. Configure provider webhook confirmation callback to record verified external delivery.',
-    },
+    status: 400,
+    body: { error: `Unsupported external channel: ${String(channel)}` },
   };
 }
 
@@ -1531,6 +1733,33 @@ export async function handleSmsBalance(provider?: ServerSmsProvider): Promise<Ha
       provider: target,
       balanceLabel: 'Credentials Active',
       detail: `${info.name} credentials are configured on the server. Check provider dashboard for detailed credit breakdown.`,
+    },
+  };
+}
+
+export async function handleVerifyPlatformAdmin(authHeader?: string): Promise<HandlerResult> {
+  const decision = await verifyPlatformAdminAuthorization(authHeader);
+  if (!decision.ok) {
+    return {
+      status: decision.status,
+      body: {
+        authorized: false,
+        code: decision.code,
+        error: decision.error,
+      },
+    };
+  }
+  return {
+    status: 200,
+    body: {
+      authorized: true,
+      uid: decision.uid,
+      email: decision.email,
+      fullName: decision.fullName,
+      role: decision.role,
+      platformRole: decision.platformRole,
+      tenantId: decision.tenantId,
+      profileVerifiedInDb: decision.profileVerifiedInDb,
     },
   };
 }

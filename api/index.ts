@@ -11,6 +11,7 @@ import {
   handleSmsBalance,
   handleSmsSend,
   handleSmsStatus,
+  handleVerifyPlatformAdmin,
   type ServerSmsProvider,
 } from '../server/handlers.ts';
 import {
@@ -187,7 +188,7 @@ export default async function handler(req: VercelReq, res: VercelRes): Promise<v
         return;
       }
       const body = await parseJsonBody(req);
-      const out = handleDispatchExternal(body as Parameters<typeof handleDispatchExternal>[0]);
+      const out = await handleDispatchExternal(body as Parameters<typeof handleDispatchExternal>[0]);
       sendJson(res, out.status, out.body);
       return;
     }
@@ -267,7 +268,11 @@ export default async function handler(req: VercelReq, res: VercelRes): Promise<v
         return;
       }
       const body = await parseJsonBody(req);
-      const out = await handleScanIdDocument(body as ScanIdRequestBody);
+      const out = await handleScanIdDocument(
+        body as ScanIdRequestBody,
+        authHeader,
+        req.headers.cookie
+      );
       sendJson(res, out.status, out.body);
       return;
     }
@@ -279,6 +284,17 @@ export default async function handler(req: VercelReq, res: VercelRes): Promise<v
         return;
       }
       const out = await handleAiSecurityAudit(authHeader);
+      sendJson(res, out.status, out.body);
+      return;
+    }
+
+    if (routePath === '/api/saas/verify-super-admin') {
+      applyNoStoreHeaders(res);
+      if (method !== 'POST') {
+        sendJson(res, 405, { error: 'Method Not Allowed' });
+        return;
+      }
+      const out = await handleVerifyPlatformAdmin(authHeader);
       sendJson(res, out.status, out.body);
       return;
     }

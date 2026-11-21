@@ -255,6 +255,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [staffCompensations, setStaffCompensations] = useState<StaffCompensation[]>([]);
   const [identityDocuments, setIdentityDocuments] = useState<IdentityDocumentRecord[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
+  const [coursesLoaded, setCoursesLoaded] = useState(false);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [classBatches, setClassBatches] = useState<ClassBatch[]>([]);
   const [instituteDocuments, setInstituteDocuments] = useState<InstituteDocument[]>([]);
@@ -378,19 +379,60 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             ? 'SUPER_ADMIN'
             : (d.platformRole as PlatformRole | undefined) || undefined;
           const resolvedTenantId = (d.tenantId as string | undefined) || DEFAULT_ZACMA_TENANT_ID;
+          const resolvedEmail = (d.email || firebaseUser.email || '').trim().slice(0, 160);
+          const resolvedFullName = (
+            d.fullName ||
+            firebaseUser.displayName ||
+            resolvedEmail.split('@')[0] ||
+            'ZACMA Platform Admin'
+          )
+            .toString()
+            .trim()
+            .slice(0, 120);
+          const resolvedCreatedAt = typeof d.createdAt === 'string' && d.createdAt ? d.createdAt : now;
 
-          // Ensure bootstrap super admin profile has platformRole & tenantId persisted
-          if (isBootstrap && (d.platformRole !== 'SUPER_ADMIN' || !d.tenantId)) {
-            await setDoc(
-              profileRef,
-              {
-                platformRole: 'SUPER_ADMIN',
-                tenantId: resolvedTenantId,
-                role: 'ADMIN',
-                updatedAt: now,
-              },
-              { merge: true }
-            ).catch(() => undefined);
+          // Ensure bootstrap super admin profile has database-backed platformRole, role, isActive, and tenantId persisted cleanly
+          if (
+            isBootstrap &&
+            (d.platformRole !== 'SUPER_ADMIN' ||
+              !d.tenantId ||
+              d.role !== 'ADMIN' ||
+              d.isActive !== true ||
+              d.uid !== firebaseUser.uid ||
+              !d.createdAt)
+          ) {
+            const normalizedProfile: Record<string, unknown> = {
+              uid: firebaseUser.uid,
+              tenantId: resolvedTenantId,
+              platformRole: 'SUPER_ADMIN',
+              email: resolvedEmail,
+              fullName: resolvedFullName,
+              role: 'ADMIN',
+              isActive: true,
+              createdAt: resolvedCreatedAt,
+              updatedAt: now,
+            };
+            if (typeof d.phone === 'string' && d.phone.trim()) {
+              normalizedProfile.phone = d.phone.trim().slice(0, 30);
+            }
+            if (typeof d.inviteId === 'string' && d.inviteId.trim()) {
+              normalizedProfile.inviteId = d.inviteId.trim().slice(0, 128);
+            }
+            if (typeof d.linkedStudentId === 'string' && d.linkedStudentId.trim()) {
+              normalizedProfile.linkedStudentId = d.linkedStudentId.trim().slice(0, 128);
+            }
+            if (Array.isArray(d.allowedModules)) {
+              normalizedProfile.allowedModules = d.allowedModules.slice(0, 20);
+            }
+            if (typeof d.canExportReports === 'boolean') {
+              normalizedProfile.canExportReports = d.canExportReports;
+            }
+            if (typeof d.lastLoginAt === 'string' && d.lastLoginAt.trim()) {
+              normalizedProfile.lastLoginAt = d.lastLoginAt.trim().slice(0, 40);
+            }
+            await setDoc(profileRef, normalizedProfile).catch((syncErr) => {
+              console.warn('Super Admin profile sync warning:', syncErr);
+            });
           }
 
           resolved = {
@@ -399,8 +441,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             tenantId: resolvedTenantId,
             platformRole: resolvedPlatformRole,
             inviteId: d.inviteId,
-            email: d.email || firebaseUser.email || '',
-            fullName: d.fullName || firebaseUser.displayName || 'ZACMA User',
+            email: resolvedEmail,
+            fullName: resolvedFullName,
             phone: d.phone,
             role: isBootstrap ? 'ADMIN' : (d.role as RoleCode),
             linkedStudentId: d.linkedStudentId,
@@ -410,7 +452,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             canExportReports: typeof d.canExportReports === 'boolean' ? d.canExportReports : undefined,
             lastLoginAt: d.lastLoginAt,
             isActive: d.isActive ?? true,
-            createdAt: d.createdAt || now,
+            createdAt: resolvedCreatedAt,
             updatedAt: d.updatedAt || now,
           };
         } else {
@@ -748,6 +790,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     if (!user || !profile || !actualRole) return;
 
     setDataLoading(true);
+    setCoursesLoaded(false);
     const unsubs: Array<() => void> = [];
     const userTenantId = profile.tenantId || DEFAULT_ZACMA_TENANT_ID;
 
@@ -1230,7 +1273,24 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
     // Core staff collections (readable by Admin, Manager, Accountant, Instructor, Receptionist, HR Officer, General Staff)
     subscribe<RoleRecord>('roles', setRoles, undefined, true);
-    subscribe<Course>('courses', setCourses, (a, b) => a.name.localeCompare(b.name));
+    const coursesRefOrQuery = isPlatformUser
+      ? collection(db, 'courses')
+      : query(collection(db, 'courses'), where('tenantId', '==', userTenantId));
+    const coursesUnsub = onSnapshot(
+      coursesRefOrQuery,
+      (snapshot) => {
+        const rows = snapshot.docs.map(
+          (d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }) as Course
+        );
+        rows.sort((a, b) => a.name.localeCompare(b.name));
+        setCourses(rows);
+        setCoursesLoaded(true);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'courses');
+      }
+    );
+    unsubs.push(coursesUnsub);
     subscribe<Department>('departments', setDepartments, (a, b) => a.name.localeCompare(b.name));
     subscribe<ClassBatch>('class_batches', setClassBatches, (a, b) => b.startDate.localeCompare(a.startDate));
 
@@ -1518,6 +1578,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (
       !dataLoading &&
+      coursesLoaded &&
       !canonicalCoursesSyncedRef.current &&
       profile &&
       actualRole === 'ADMIN' &&
@@ -1529,9 +1590,12 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         fullName: profile.fullName,
         role: actualRole,
         tenantId: DEFAULT_ZACMA_TENANT_ID,
+      }).catch(() => {
+        // Non-fatal during transient offline startup; can be retried from Courses catalog
+        canonicalCoursesSyncedRef.current = false;
       });
     }
-  }, [dataLoading, profile, actualRole, activeTenantId, scopedCourses]);
+  }, [dataLoading, coursesLoaded, profile, actualRole, activeTenantId, scopedCourses]);
 
   const unreadMessagesCount = useMemo(() => {
     if (!user) return 0;
